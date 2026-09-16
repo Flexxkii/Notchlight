@@ -1,0 +1,22 @@
+.build/
+.swiftpm/
+build/
+.DS_Store
+dist/
+
+# Local agent instructions, design explorations, and machine-specific audit records.
+/AGENTS.md
+/logo gens/
+/docs/validation/
+/docs/macos-26-codex-reference-pack.md
+/docs/macos-design-notes.md
+/docs/macos-optimization-audit.md
+/docs/licensing-and-distribution-review.md
+
+# Signing material and local secrets are never part of the source release.
+.env
+.env.*
+*.p12
+*.p8
+*.mobileprovision
+*.provisionprofile

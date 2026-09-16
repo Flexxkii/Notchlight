@@ -1,0 +1,50 @@
+{
+  "fill" : {
+    "automatic-gradient" : "extended-srgb:0.05500,0.06700,0.09000,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "glass" : false,
+          "image-name" : "01-Ambient-Glow.svg",
+          "name" : "Ambient coral glow"
+        }
+      ],
+      "name" : "Ambient Light",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0
+      }
+    },
+    {
+      "layers" : [
+        {
+          "image-name" : "02-Notch-Body.svg",
+          "name" : "Coral notch — editable vector"
+        },
+        {
+          "glass" : false,
+          "image-name" : "03-Edge-Highlight.svg",
+          "name" : "Warm edge highlight"
+        }
+      ],
+      "name" : "Ember Notch",
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.35
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}
