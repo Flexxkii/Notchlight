@@ -7,7 +7,8 @@ enum NotchHoverPresentation {
         isLinked: Bool,
         usage: CodexUsageValue?,
         isRefreshing: Bool,
-        isStale: Bool = false
+        isStale: Bool = false,
+        display: CodexUsageDisplay = .used
     ) -> NotchHoverContent {
         guard isLinked else {
             return NotchHoverContent(
@@ -27,7 +28,7 @@ enum NotchHoverPresentation {
             )
         }
 
-        let usageText = "\(usage.usedPercent.formatted(.number.precision(.fractionLength(0...1))))% used"
+        let usageText = display.summary(for: usage)
         let usageCaption = "\(usage.title) usage"
         if isStale {
             let resetText = usage.resetsAt.map { resetDateText($0) } ?? "Unavailable"

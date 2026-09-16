@@ -56,7 +56,9 @@ The implementation notes reference Apple’s [`NSScreen.auxiliaryTopLeftArea`](h
 
 ## Codex connection
 
-The **Connect to Codex** switch lets account usage drive the border from 0% to the percentage already used. **Automatic** chooses the five-hour window when reported, otherwise the weekly window. You can also select a window explicitly. Missing limits are shown as unavailable, never as a measured 0%.
+The **Connect to Codex** switch lets account usage drive the border. Under **Usage display**, choose **Used** (the default) or **Remaining**. Remaining shows 100% minus the reported usage: for example, 41% used becomes 59% remaining. The choice is saved and updates the border length, preview, settings percentage, hover details, and notch menu. Resetting appearance preserves this choice.
+
+**Usage window → Automatic** chooses the five-hour window when reported, otherwise the weekly window. You can also select a window explicitly. Missing limits are shown as unavailable, never as a measured 0% used or 100% remaining.
 
 The app reads usage once per minute through the installed Codex CLI’s [local app-server account API](https://learn.chatgpt.com/docs/app-server). It uses your existing Codex sign-in, makes no model requests, and never reads or stores authentication tokens. Refresh failures retain the last known value with a warning in settings. Quit the app or disconnect to stop its monitoring.
 

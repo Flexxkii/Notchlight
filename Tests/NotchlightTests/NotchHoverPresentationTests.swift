@@ -6,6 +6,31 @@ import Testing
 @testable import Notchlight
 
 struct NotchHoverPresentationTests {
+    @Test("remaining hover shows converted usage and preserves reset and stale state", arguments: [false, true])
+    func remainingUsage(isStale: Bool) {
+        let usage = CodexUsageValue(usedPercent: 43, windowDurationMins: 300,
+                                   resetsAt: Date(timeIntervalSince1970: 1_758_320_280))
+        let content = NotchHoverPresentation.make(isLinked: true, usage: usage,
+                                                isRefreshing: false, isStale: isStale, display: .remaining)
+        #expect(content.usageText == "57% remaining")
+        #expect(content.usageCaption == "5-hour usage")
+        #expect(content.resetCaption == (isStale ? "Last known reset" : "Resets"))
+        #expect(content.resetText != "Unavailable")
+    }
+
+    @Test("remaining mode preserves unavailable, loading, and disconnected states")
+    func remainingUnavailableStates() {
+        let missing = NotchHoverPresentation.make(isLinked: true, usage: nil,
+                                                isRefreshing: false, display: .remaining)
+        #expect(missing.usageText == "Usage unavailable")
+        let loading = NotchHoverPresentation.make(isLinked: true, usage: nil,
+                                                isRefreshing: true, display: .remaining)
+        #expect(loading.usageText == "Reading usage…")
+        let disconnected = NotchHoverPresentation.make(isLinked: false, usage: nil,
+                                                     isRefreshing: false, display: .remaining)
+        #expect(disconnected.usageText == "Not connected")
+    }
+
     @Test("linked usage shows used percentage and exact reset date")
     func linkedUsage() {
         let content = NotchHoverPresentation.make(

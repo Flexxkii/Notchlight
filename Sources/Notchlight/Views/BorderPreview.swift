@@ -10,7 +10,7 @@ struct BorderPreview: View {
     private var previewTitle: String {
         if model.codexLinked {
             guard let usage = model.selectedUsage else { return "Waiting for Codex usage" }
-            return "\(usage.usedPercent.formatted())% of \(usage.title.lowercased()) usage"
+            return "\(model.codexUsageDisplay.formattedPercentage(for: usage)) \(usage.title.lowercased()) \(model.codexUsageDisplay.description)"
         }
         return "Meet your Mac’s new outline."
     }
@@ -86,7 +86,7 @@ struct BorderPreview: View {
                 .strokeBorder(.white.opacity(contrast == .increased ? 0.6 : 0.10), lineWidth: 1)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Appearance preview: camera notch, from \(model.effectiveStartPercentage.formatted()) to \(model.effectiveEndPercentage.formatted()) percent, \(model.lineWidth.formatted()) point border\(model.effectiveIsEnabled ? "" : ", hidden")")
+        .accessibilityLabel("Appearance preview: camera notch, from \(model.effectiveStartPercentage.formatted()) to \(model.effectiveEndPercentage.formatted()) percent, \(model.lineWidth.formatted()) point border\(model.effectiveIsEnabled ? "" : ", hidden")\(model.codexLinked ? ", " + previewTitle : "")")
         .onAppear {
             model.diagnostics.updateContext(["preview_present": .bool(true), "preview_pulse_active": .bool(shouldPulse)])
         }

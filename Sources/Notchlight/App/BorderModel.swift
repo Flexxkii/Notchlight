@@ -19,6 +19,7 @@ final class BorderModel {
         }
     }
     var codexWindow: CodexUsageWindow { didSet { saveAndApply() } }
+    var codexUsageDisplay: CodexUsageDisplay { didSet { saveAndApply() } }
     var isEnabled: Bool { didSet { saveAndApply() } }
     var hideWhenSwiping: Bool {
         didSet {
@@ -124,8 +125,9 @@ final class BorderModel {
 
     var hasTarget: Bool { detectedNotchCount > 0 }
     var selectedUsage: CodexUsageValue? { codex.usage?.value(for: codexWindow) }
+    var selectedUsagePercentage: Double? { selectedUsage.map { codexUsageDisplay.percentage(for: $0) } }
     var effectiveStartPercentage: Double { codexLinked ? 0 : startPercentage }
-    var effectiveEndPercentage: Double { codexLinked ? selectedUsage?.usedPercent ?? 0 : endPercentage }
+    var effectiveEndPercentage: Double { codexLinked ? selectedUsagePercentage ?? 0 : endPercentage }
     var effectiveGlow: Bool { codexLinked ? codex.isWorking : glow }
     var effectivePulse: Bool { codexLinked && codex.isWorking }
     var effectiveBorderColor: Color { codexLinked && codex.isWorking ? workingColor : borderColor }
@@ -153,8 +155,9 @@ final class BorderModel {
         if !hasTarget { return "No camera notch detected" }
         if codexLinked {
             guard let selectedUsage else { return codex.isRefreshing ? "Reading Codex usage…" : "Codex usage unavailable" }
-            if codex.usageError != nil { return "Last known usage: \(selectedUsage.usedPercent.formatted())%" }
-            return "\(selectedUsage.usedPercent.formatted())% used · \(codex.isWorking ? "Codex working" : "Codex linked")"
+            let summary = codexUsageDisplay.summary(for: selectedUsage)
+            if codex.usageError != nil { return "Last known usage: \(summary)" }
+            return "\(summary) · \(codex.isWorking ? "Codex working" : "Codex linked")"
         }
         if startPercentage == endPercentage { return "Line range is empty" }
         return "Your border is on"
@@ -198,10 +201,12 @@ final class BorderModel {
             "strips.color.green": 1.0,
             "strips.color.blue": 1.0,
             "codex.linked": true,
-            "codex.window": CodexUsageWindow.automatic.rawValue
+            "codex.window": CodexUsageWindow.automatic.rawValue,
+            "codex.usageDisplay": CodexUsageDisplay.used.rawValue
         ])
         codexLinked = defaults.bool(forKey: "codex.linked")
         codexWindow = CodexUsageWindow(rawValue: defaults.string(forKey: "codex.window") ?? "") ?? .automatic
+        codexUsageDisplay = CodexUsageDisplay(rawValue: defaults.string(forKey: "codex.usageDisplay") ?? "") ?? .used
         isEnabled = defaults.bool(forKey: "border.enabled")
         hideWhenSwiping = defaults.bool(forKey: "border.hideWhenSwiping")
         showOnlyWhileWorking = defaults.bool(forKey: "border.showOnlyWhileWorking")
@@ -321,6 +326,7 @@ final class BorderModel {
         defaults.set(resolvedStripColor.blueComponent, forKey: "strips.color.blue")
         defaults.set(codexLinked, forKey: "codex.linked")
         defaults.set(codexWindow.rawValue, forKey: "codex.window")
+        defaults.set(codexUsageDisplay.rawValue, forKey: "codex.usageDisplay")
         apply()
     }
 
@@ -350,7 +356,8 @@ final class BorderModel {
             strips: stripStyle,
             hoverContent: NotchHoverPresentation.make(
                 isLinked: codexLinked, usage: selectedUsage,
-                isRefreshing: codex.isRefreshing, isStale: codex.usageError != nil
+                isRefreshing: codex.isRefreshing, isStale: codex.usageError != nil,
+                display: codexUsageDisplay
             ),
             hoverStyle: NotchHoverStyle(textSize: hoverTextSize)
         )

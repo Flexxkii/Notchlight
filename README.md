@@ -16,7 +16,8 @@ or simply give your notch a border in a color you like.
 ## What it does
 
 - **Usage around the notch.** Connect your existing Codex installation to show
-  the percentage of your five-hour or weekly allowance already used.
+  the percentage of your five-hour or weekly allowance used or remaining.
+  Choose **Usage display → Remaining** in Settings to show what's left.
 - **Activity you can see.** A configurable working color and gentle glow mark
   local Codex activity. Optionally hide the border when idle, with a timeout.
 - **Details on hover.** Hover for the usage percentage and reset date; click the
@@ -35,7 +36,7 @@ CLI and existing sign-in; it does not include a subscription or extra usage.
 ## Download and install
 
 1. Open [Releases](https://github.com/Flexxkii/notchlight/releases).
-2. Download `Notchlight-1.0.1-macOS-arm64.zip`, then unzip it.
+2. Download `Notchlight-1.0.2-macOS-arm64.zip`, then unzip it.
 3. Move `Notchlight.app` to Applications and open it.
 4. Adjust the border, or enable **Connect to Codex** if Codex is installed and
    signed in on your Mac.
@@ -59,7 +60,7 @@ the repository remains private.
 | --- | --- |
 | Operating system | macOS 14 or later |
 | Visible notch border | A supported notched MacBook display |
-| Published 1.0.1 build | Apple Silicon (`arm64`) |
+| Published 1.0.2 build | Apple Silicon (`arm64`) |
 | Optional Codex features | Installed Codex CLI/desktop app and an existing compatible sign-in |
 | Building from source | Full Xcode 26+ with Swift 6.2+ and Icon Composer asset compilation |
 

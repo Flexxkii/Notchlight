@@ -23,9 +23,9 @@ struct CodexConnectionView: View {
                 if model.codexLinked {
                     HStack(alignment: .firstTextBaseline) {
                         if let usage = model.selectedUsage {
-                            Text("\(usage.usedPercent.formatted(.number.precision(.fractionLength(0...1))))%")
+                            Text(model.codexUsageDisplay.formattedPercentage(for: usage))
                                 .font(.title2.weight(.semibold).monospacedDigit())
-                            Text("\(usage.title.lowercased()) used")
+                            Text("\(usage.title.lowercased()) \(model.codexUsageDisplay.description)")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         } else {
@@ -47,6 +47,14 @@ struct CodexConnectionView: View {
                             Text(window.title).tag(window)
                         }
                     }
+
+                    Picker("Usage display", selection: $model.codexUsageDisplay) {
+                        ForEach(CodexUsageDisplay.allCases) { display in
+                            Text(display.title).tag(display)
+                        }
+                    }
+                    .accessibilityIdentifier("codexUsageDisplayPicker")
+                    .help("Show the percentage used or remaining in the border and usage details.")
 
                     HStack {
                         Label(
