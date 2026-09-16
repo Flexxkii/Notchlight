@@ -130,7 +130,10 @@ public actor CodexActivityReader {
         for url in rolloutPaths.prefix(maxCachedFiles) {
             if Task.isCancelled { outcome = .cancelled; return unavailable(at: sampledAt) }
             sampledMetadataChecks += 1
-            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]),
+            // Catalog URLs retain cached resource values. Fetch fresh metadata
+            // on every poll so appends and truncations are observed promptly.
+            let fileURL = URL(fileURLWithPath: url.path)
+            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]),
                   values.isRegularFile == true,
                   let modified = values.contentModificationDate,
                   let size = values.fileSize else { sampledUnreadableFiles += 1; continue }
@@ -252,9 +255,11 @@ public actor CodexActivityReader {
         let reset = previous == nil || metadata.size < state.offset || metadata.modifiedAt < state.modifiedAt
         if reset {
             state = ActivityFileState(metadata: metadata)
+            // Skipping an old file also consumes its existing extent. Leaving
+            // offset at zero would read that history as growth on the next poll.
+            state.offset = metadata.size
             guard metadata.modifiedAt >= sampledAt.addingTimeInterval(-activeWindow) else { return state }
             let data = readTail(url: URL(fileURLWithPath: metadata.path), size: metadata.size)
-            state.offset = metadata.size
             let result = CodexActivityParser.consume(data: data, state: &state, launchDate: launchDate)
             sampledParsedRecords += result.parsedRecords
             sampledParseFailures += result.parseFailures

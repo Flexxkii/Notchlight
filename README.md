@@ -36,7 +36,7 @@ CLI and existing sign-in; it does not include a subscription or extra usage.
 ## Download and install
 
 1. Open [Releases](https://github.com/Flexxkii/notchlight/releases).
-2. Download `Notchlight-1.0.2-macOS-arm64.zip`, then unzip it.
+2. Download `Notchlight-1.0.3-macOS-arm64.zip`, then unzip it.
 3. Move `Notchlight.app` to Applications and open it.
 4. Adjust the border, or enable **Connect to Codex** if Codex is installed and
    signed in on your Mac.
@@ -51,8 +51,7 @@ may not permit an override. You do not need to disable Gatekeeper globally.
 `SHA256SUMS.txt` accompanies the release. To verify the downloaded archive, place
 both files in the same folder and run `shasum -a 256 -c SHA256SUMS.txt` there.
 
-The repository and its releases are visible only to people with access while
-the repository remains private.
+The repository and its releases are public.
 
 ## Requirements and compatibility
 
@@ -60,7 +59,7 @@ the repository remains private.
 | --- | --- |
 | Operating system | macOS 14 or later |
 | Visible notch border | A supported notched MacBook display |
-| Published 1.0.2 build | Apple Silicon (`arm64`) |
+| Published 1.0.3 build | Apple Silicon (`arm64`) |
 | Optional Codex features | Installed Codex CLI/desktop app and an existing compatible sign-in |
 | Building from source | Full Xcode 26+ with Swift 6.2+ and Icon Composer asset compilation |
 

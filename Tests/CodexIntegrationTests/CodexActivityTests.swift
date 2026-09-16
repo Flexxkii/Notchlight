@@ -137,6 +137,71 @@ struct CodexActivityTests {
         recorder.shutdown()
     }
 
+    @Test("old files stay skipped across polls and resume at newly appended events", arguments: [false, true])
+    func skippedOldFilesResumeFromEnd(afterTruncation: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("notchlight-old-activity-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sessions = root.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        let rollout = sessions.appendingPathComponent("old.jsonl")
+        try createFixtureDatabase(at: root.appendingPathComponent("state_1.sqlite"), paths: ["old.jsonl"])
+        let sampleNow = Date()
+        let logDirectory = root.appendingPathComponent("logs")
+        let recorder = DiagnosticRecorder(directory: logDirectory, enabled: true)
+        defer { recorder.shutdown() }
+        let reader = CodexActivityReader(diagnostics: recorder, codexHome: root,
+                                        desktopLaunchDateProvider: { sampleNow.addingTimeInterval(-10) })
+
+        if afterTruncation {
+            var initial = event(type: "task_started", at: sampleNow.addingTimeInterval(-1))
+            initial.append(Data(String(repeating: "{\"type\":\"session_meta\"}\n", count: 128).utf8))
+            try initial.write(to: rollout)
+            let active = await reader.read()
+            #expect(active.isWorking)
+        }
+
+        let oldData = Data(String(repeating: "{\"type\":\"session_meta\"}\n", count: 32).utf8)
+        try oldData.write(to: rollout)
+        try FileManager.default.setAttributes([.modificationDate: sampleNow.addingTimeInterval(-60 * 60)],
+                                              ofItemAtPath: rollout.path)
+        for _ in 0..<3 {
+            let idle = await reader.read()
+            #expect(idle.isAvailable)
+            #expect(!idle.isWorking)
+        }
+
+        let started = event(type: "task_started", at: Date().addingTimeInterval(-1))
+        let stopped = event(type: "turn_aborted", at: Date())
+        let handle = try FileHandle(forWritingTo: rollout)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: started)
+        let active = await reader.read()
+        #expect(active.isAvailable)
+        #expect(active.activeTaskCount == 1)
+        try handle.write(contentsOf: stopped)
+        let idle = await reader.read()
+        #expect(idle.isAvailable)
+        #expect(!idle.isWorking)
+        _ = await reader.read()
+
+        recorder.flush()
+        let files = try FileManager.default.contentsOfDirectory(at: logDirectory, includingPropertiesForKeys: nil)
+        let records = try files.filter { $0.pathExtension == "jsonl" }.flatMap { url in
+            try Data(contentsOf: url).split(separator: 10).map {
+                try #require(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
+            }
+        }.sorted { ($0["sequence"] as? Int ?? 0) < ($1["sequence"] as? Int ?? 0) }
+        let reads = records.compactMap { $0["fields"] as? [String: Any] }.filter {
+            $0["operation"] as? String == "activityRead" && $0["phase"] as? String == "end"
+        }.dropFirst(afterTruncation ? 1 : 0)
+        // Assert actual I/O, not just idle classification: stale files used to
+        // be read on the second poll even though their metadata was unchanged.
+        #expect(reads.map { $0["bytesRead"] as? Int } == [0, 0, 0, started.count, stopped.count, 0])
+        #expect(reads.map { $0["parsedRecords"] as? Int } == [0, 0, 0, 1, 1, 0])
+        #expect(reads.allSatisfy { $0["parseFailures"] as? Int == 0 })
+    }
+
     private func createFixtureDatabase(at url: URL, paths: [String]) throws {
         var database: OpaquePointer?
         #expect(sqlite3_open(url.path, &database) == SQLITE_OK)
