@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Only the glowing stroke depends on time; the backdrop, labels, and ticks stay outside this timeline.
-struct BorderPreviewOutline: View {
+/// Core Animation owns the pulse; SwiftUI only sends appearance/visibility changes.
+struct BorderPreviewOutline: NSViewRepresentable {
     let color: Color
     let lineWidth: Double
     let outset: Double
@@ -11,19 +11,16 @@ struct BorderPreviewOutline: View {
     let glow: Bool
     let shouldPulse: Bool
 
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !shouldPulse)) { timeline in
-            let pulse = shouldPulse ? Self.pulseAmount(at: timeline.date) : 0
-            PreviewNotchShape(outset: outset)
-                .trim(from: start, to: end)
-                .stroke(color.opacity(isEnabled && end > start ? 1 : 0),
-                        style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                .shadow(color: glow && isEnabled
-                            ? color.opacity(shouldPulse ? 0.25 + 0.75 * pulse : 0.85)
-                            : .clear,
-                        radius: shouldPulse ? 3 + 9 * pulse : 8)
-        }
-        .accessibilityHidden(true)
+    func makeNSView(context: Context) -> PreviewOutlineView { PreviewOutlineView() }
+
+    func updateNSView(_ view: PreviewOutlineView, context: Context) {
+        view.update(.init(color: NSColor(color), lineWidth: lineWidth, outset: outset,
+                          start: start, end: end, isEnabled: isEnabled,
+                          glow: glow, shouldPulse: shouldPulse))
+    }
+
+    static func dismantleNSView(_ view: PreviewOutlineView, coordinator: ()) {
+        view.stopAnimating()
     }
 
     static func pulseAmount(at date: Date) -> Double {

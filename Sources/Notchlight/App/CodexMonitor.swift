@@ -14,7 +14,7 @@ final class CodexMonitor {
 
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored private let usageReader: CodexUsageReader
-    @ObservationIgnored private let activityReader: CodexActivityReader
+    @ObservationIgnored private let activityObservation: CodexActivityObservation
     @ObservationIgnored private let diagnostics: DiagnosticRecorder
     @ObservationIgnored private var usageTask: Task<Void, Never>?
     @ObservationIgnored private var activityTask: Task<Void, Never>?
@@ -26,7 +26,7 @@ final class CodexMonitor {
     init(diagnostics: DiagnosticRecorder = .disabled) {
         self.diagnostics = diagnostics
         usageReader = CodexUsageReader(diagnostics: diagnostics)
-        activityReader = CodexActivityReader(diagnostics: diagnostics)
+        activityObservation = CodexActivityObservation(diagnostics: diagnostics)
     }
 
     func start() {
@@ -42,13 +42,11 @@ final class CodexMonitor {
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
             }
         }
+        let activityStream = activityObservation.snapshots()
         activityTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self, self.generation == current else { return }
-                let snapshot = await self.activityReader.read()
-                guard !Task.isCancelled, self.generation == current else { return }
+            for await snapshot in activityStream {
+                guard !Task.isCancelled, let self, self.generation == current else { return }
                 self.recordActivity(snapshot)
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
     }
@@ -57,6 +55,7 @@ final class CodexMonitor {
         generation += 1
         usageTask?.cancel()
         activityTask?.cancel()
+        activityObservation.stop()
         refreshTask?.cancel()
         usageTask = nil
         activityTask = nil
@@ -89,8 +88,9 @@ final class CodexMonitor {
             || activity?.isAvailable != snapshot.isAvailable
             || activity?.activeTaskCount != snapshot.activeTaskCount
             || activity?.detail != snapshot.detail
+        guard changed else { return }
         activity = snapshot
-        if changed { onChange?() }
+        onChange?()
     }
 
     private func refreshUsage(generation current: Int) async {

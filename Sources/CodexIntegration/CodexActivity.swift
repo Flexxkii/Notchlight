@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import Darwin
 import Diagnostics
 #if canImport(AppKit)
 import AppKit
@@ -25,12 +26,15 @@ public struct CodexActivitySnapshot: Sendable, Equatable {
 public actor CodexActivityReader {
     private let diagnostics: DiagnosticRecorder
     private let desktopLaunchDateProvider: @Sendable () async -> Date?
-    private let codexHome: URL
+    nonisolated let codexHome: URL
     private let sessionRoot: URL
     private var filesByPath: [String: ActivityFileState] = [:]
-    private var lastPathRefresh: Date = .distantPast
     private var rolloutPaths: [URL] = []
     private var desktopLaunchDate: Date?
+    private var sourceAvailable = false
+    private var catalogAvailable = false
+    private var catalogWatchPaths: Set<String> = []
+    private var unreadablePaths: Set<String> = []
     private var sampledBytesRead = 0
     private var sampledChangedFiles = 0
     private var sampledMetadataChecks = 0
@@ -38,7 +42,6 @@ public actor CodexActivityReader {
     private var sampledUnreadableFiles = 0
     private var sampledParseFailures = 0
 
-    private let pathRefreshInterval: TimeInterval = 10
     private let activeWindow: TimeInterval = 15 * 60
     private let maxTailBytes = 8 * 1024 * 1024
     private let maxCachedFiles = 256
@@ -62,12 +65,21 @@ public actor CodexActivityReader {
         }
         let home = codexHome ?? ProcessInfo.processInfo.environment["CODEX_HOME"].map(URL.init(fileURLWithPath:))
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
-        self.codexHome = home
-        self.sessionRoot = home.appendingPathComponent("sessions", isDirectory: true)
+        self.codexHome = home.standardizedFileURL.resolvingSymlinksInPath()
+        self.sessionRoot = self.codexHome.appendingPathComponent("sessions", isDirectory: true)
     }
 
+    /// An explicit reconciliation. Continuous consumers should use CodexActivityObservation.
     public func read() async -> CodexActivitySnapshot {
-        let sampledAt = Date()
+        let launch = await currentDesktopLaunchDate()
+        return refresh(paths: nil, refreshCatalog: true, launchDate: launch, reason: "explicit").snapshot
+    }
+
+    func currentDesktopLaunchDate() async -> Date? { await desktopLaunchDateProvider() }
+
+    /// Runs entirely on the reader actor; no suspension can interleave cache mutations.
+    func refresh(paths: Set<String>?, refreshCatalog: Bool, launchDate: Date?,
+                 reason: String, now: Date = Date()) -> ActivityRefresh {
         sampledBytesRead = 0
         sampledChangedFiles = 0
         sampledMetadataChecks = 0
@@ -75,9 +87,10 @@ public actor CodexActivityReader {
         sampledUnreadableFiles = 0
         sampledParseFailures = 0
         let interval = diagnostics.beginInterval(.activityRead)
-        var outcome: DiagnosticOutcome = .failed
+        var outcome: DiagnosticOutcome = .success
         defer {
             diagnostics.endInterval(interval, outcome: outcome, fields: [
+                "reason": .string(reason),
                 "rolloutPaths": .int(Int64(rolloutPaths.count)),
                 "cachedFiles": .int(Int64(filesByPath.count)),
                 "metadataChecks": .int(Int64(sampledMetadataChecks)),
@@ -88,70 +101,106 @@ public actor CodexActivityReader {
                 "parseFailures": .int(Int64(sampledParseFailures))
             ])
         }
-        if Task.isCancelled { outcome = .cancelled; return unavailable(at: sampledAt) }
-
-        let discovery = diagnostics.beginInterval(.databaseDiscovery)
-        let dbURL = latestStateDatabase()
-        diagnostics.endInterval(discovery, outcome: dbURL == nil ? .unavailable : .success)
-        guard let dbURL else {
-            outcome = .unavailable
-            return unavailable(at: sampledAt)
+        if Task.isCancelled { outcome = .cancelled; return ActivityRefresh(snapshot: unavailable(at: now)) }
+        guard let launchDate else {
+            desktopLaunchDate = nil
+            filesByPath.removeAll()
+            rolloutPaths.removeAll()
+            sourceAvailable = true
+            catalogAvailable = false
+            unreadablePaths.removeAll()
+            catalogWatchPaths.removeAll()
+            return ActivityRefresh(snapshot: idle(at: now), watchTargets: .init())
         }
-
-        let currentLaunchDate = await runningDesktopLaunchDate()
-        guard let currentLaunchDate else {
-            filesByPath.removeAll(keepingCapacity: true)
-            outcome = .success
-            return idle(at: sampledAt)
+        let restarted = launchDate != desktopLaunchDate
+        if restarted {
+            desktopLaunchDate = launchDate
+            filesByPath.removeAll()
+            unreadablePaths.removeAll()
         }
-        if currentLaunchDate != desktopLaunchDate {
-            desktopLaunchDate = currentLaunchDate
-            // A process restart invalidates any unresolved lifecycle inherited from
-            // the previous desktop process. Completed events remain safe to read.
-            filesByPath = filesByPath.mapValues { state in
-                var copy = state
-                if copy.lifecycle == .active { copy.lifecycle = .unknown }
-                return copy
-            }
-        }
-
-        if sampledAt.timeIntervalSince(lastPathRefresh) >= pathRefreshInterval || rolloutPaths.isEmpty {
-            guard let paths = queryRolloutPaths(from: dbURL) else {
+        var selected = paths ?? Set(rolloutPaths.map(\.path))
+        let unknownPath = paths?.contains { path in !rolloutPaths.contains { $0.path == path } } == true
+        let needsCatalog = refreshCatalog || restarted
+        if needsCatalog {
+            let recoveringCatalog = !catalogAvailable
+            let discovery = diagnostics.beginInterval(.databaseDiscovery)
+            let dbURL = latestStateDatabase()
+            diagnostics.endInterval(discovery, outcome: dbURL == nil ? .unavailable : .success)
+            guard let dbURL, let catalog = queryRolloutPaths(from: dbURL) else {
+                sourceAvailable = false
+                catalogAvailable = false
                 outcome = .unavailable
-                return unavailable(at: sampledAt)
+                return ActivityRefresh(snapshot: unavailable(at: now), catalogUnavailable: true)
             }
-            rolloutPaths = paths
-            lastPathRefresh = sampledAt
-            let allowed = Set(rolloutPaths.map(\.path))
+            rolloutPaths = catalog
+            catalogWatchPaths = [dbURL.path, dbURL.path + "-wal"]
+            catalogAvailable = true
+            let allowed = Set(catalog.map(\.path))
             filesByPath = filesByPath.filter { allowed.contains($0.key) }
+            unreadablePaths.formIntersection(allowed)
+            // A new catalog entry always needs its initial state, even if its file event
+            // arrived before the transaction that registered it in SQLite.
+            selected.formUnion(recoveringCatalog ? allowed : allowed.subtracting(filesByPath.keys))
         }
-
-        var states: [ActivityFileState] = []
-        for url in rolloutPaths.prefix(maxCachedFiles) {
-            if Task.isCancelled { outcome = .cancelled; return unavailable(at: sampledAt) }
+        if paths == nil || restarted { selected = Set(rolloutPaths.map(\.path)) }
+        let allowed = Set(rolloutPaths.map(\.path))
+        for path in selected.intersection(allowed) {
+            unreadablePaths.remove(path)
+            if Task.isCancelled { outcome = .cancelled; return ActivityRefresh(snapshot: unavailable(at: now)) }
             sampledMetadataChecks += 1
-            // Catalog URLs retain cached resource values. Fetch fresh metadata
-            // on every poll so appends and truncations are observed promptly.
-            let fileURL = URL(fileURLWithPath: url.path)
-            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]),
-                  values.isRegularFile == true,
-                  let modified = values.contentModificationDate,
-                  let size = values.fileSize else { sampledUnreadableFiles += 1; continue }
-            let metadata = ActivityFileMetadata(path: url.path, size: Int64(size), modifiedAt: modified)
-            let previous = filesByPath[url.path]
-            if previous?.metadata.size != metadata.size || previous?.metadata.modifiedAt != metadata.modifiedAt {
-                sampledChangedFiles += 1
+            var info = stat()
+            let status = stat(path, &info)
+            let missing = status != 0 && errno == ENOENT
+            guard status == 0, (info.st_mode & S_IFMT) == S_IFREG else {
+                filesByPath.removeValue(forKey: path)
+                // Disappearing files are ordinary during archive/deletion. Other read
+                // failures must not leave a cached active task behind.
+                if !missing { sampledUnreadableFiles += 1; unreadablePaths.insert(path) }
+                continue
             }
-            if let state = update(metadata: metadata, previous: previous, sampledAt: sampledAt, launchDate: currentLaunchDate) {
-                filesByPath[url.path] = state
-                states.append(state)
+            let modified = Date(timeIntervalSince1970: Double(info.st_mtimespec.tv_sec)
+                + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000)
+            let metadata = ActivityFileMetadata(path: path, size: Int64(info.st_size), modifiedAt: modified,
+                identity: ActivityFileIdentity(device: Int64(info.st_dev), inode: UInt64(info.st_ino)))
+            let previous = filesByPath[path]
+            if previous?.metadata != metadata { sampledChangedFiles += 1 }
+            do {
+                let updated = try update(metadata: metadata, previous: previous, sampledAt: now, launchDate: launchDate)
+                guard !Task.isCancelled else { outcome = .cancelled; return ActivityRefresh(snapshot: unavailable(at: now)) }
+                filesByPath[path] = updated
+            } catch {
+                filesByPath.removeValue(forKey: path)
+                sampledUnreadableFiles += 1
+                unreadablePaths.insert(path)
             }
         }
+        sourceAvailable = catalogAvailable
+        if !sourceAvailable { outcome = .unavailable }
+        let result = reclassify(now: now)
+        return ActivityRefresh(snapshot: result.snapshot, nextExpiry: result.nextExpiry,
+            catalogNeeded: unknownPath && !needsCatalog,
+            catalogUnavailable: !catalogAvailable,
+            watchTargets: ActivityWatchTargets(sessions: allowed, catalogs: catalogWatchPaths))
+    }
 
-        let result = CodexActivityClassifier.snapshot(states: states, sampledAt: sampledAt, sourceAvailable: true)
-        trimCache(keeping: Set(rolloutPaths.prefix(maxCachedFiles).map(\.path)))
-        outcome = .success
-        return result
+    func reclassify(now: Date = Date()) -> ActivityRefresh {
+        guard desktopLaunchDate != nil else { return ActivityRefresh(snapshot: idle(at: now)) }
+        let states = Array(filesByPath.values)
+        var snapshot = CodexActivityClassifier.snapshot(states: states, sampledAt: now, sourceAvailable: sourceAvailable)
+        if !unreadablePaths.isEmpty && !snapshot.isWorking { snapshot = unavailable(at: now) }
+        let deadlines = states.compactMap { state -> Date? in
+            if state.modifiedAt > now { return state.modifiedAt }
+            switch state.lifecycle {
+            case .active:
+                guard let latest = [state.lastLifecycleAt, state.lastHeartbeatAt].compactMap({ $0 }).max() else { return nil }
+                // Log timestamps can round a fraction of a millisecond ahead of
+                // the sample. Revisit that boundary as well as freshness expiry.
+                return latest.addingTimeInterval(latest > now ? 0.001 : CodexActivityClassifier.freshness + 0.001)
+            case .unknown: return state.modifiedAt.addingTimeInterval(CodexActivityClassifier.freshness + 0.001)
+            case .idle: return nil
+            }
+        }.filter { $0 > now }
+        return ActivityRefresh(snapshot: snapshot, nextExpiry: sourceAvailable ? deadlines.min() : nil)
     }
 
     private func latestStateDatabase() -> URL? {
@@ -186,7 +235,16 @@ public actor CodexActivityReader {
     private func queryRolloutPaths(from url: URL) -> [URL]? {
         let interval = diagnostics.beginInterval(.databaseQuery)
         var succeeded = false
-        defer { diagnostics.endInterval(interval, outcome: succeeded ? .success : .unavailable) }
+        var fields: [String: DiagnosticValue] = [:]
+        defer { diagnostics.endInterval(interval, outcome: succeeded ? .success : .unavailable, fields: fields) }
+        // A read-only WAL connection needs its sidecar. Between writer shutdown
+        // and recreation it may be absent; avoid repeatedly asking SQLite to
+        // open it (and flooding the system log). Never ignore a live WAL using
+        // immutable=1, or create/checkpoint Codex's database ourselves.
+        if isWaitingForWAL(at: url) {
+            fields["errorCategory"] = .string("walUnavailable")
+            return nil
+        }
         var database: OpaquePointer?
         let openResult = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil)
         guard openResult == SQLITE_OK, let database else {
@@ -212,7 +270,7 @@ public actor CodexActivityReader {
         }
         guard columns.contains("rollout_path"), columns.contains("archived") else { return nil }
         let order = columns.contains("updated_at_ms") ? "updated_at_ms" : (columns.contains("updated_at") ? "updated_at" : "rowid")
-        let sql = "SELECT rollout_path FROM threads WHERE archived = 0 AND rollout_path IS NOT NULL ORDER BY \(order) DESC LIMIT 256"
+        let sql = "SELECT rollout_path FROM threads WHERE archived = 0 AND rollout_path IS NOT NULL ORDER BY \(order) DESC LIMIT \(maxCachedFiles)"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(statement) }
@@ -223,7 +281,7 @@ public actor CodexActivityReader {
                 let value = String(cString: path)
                 let resolved: URL
                 if value.hasPrefix("/") {
-                    resolved = URL(fileURLWithPath: value)
+                    resolved = URL(fileURLWithPath: value, isDirectory: false)
                 } else if value == "sessions" || value.hasPrefix("sessions/") {
                     resolved = codexHome.appendingPathComponent(value)
                 } else {
@@ -240,26 +298,34 @@ public actor CodexActivityReader {
         return result
     }
 
+    private func isWaitingForWAL(at url: URL) -> Bool {
+        guard let file = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? file.close() }
+        guard let header = try? file.read(upToCount: 20), header.count == 20,
+              header.prefix(16) == Data("SQLite format 3\0".utf8),
+              header[18] == 2 || header[19] == 2 else { return false }
+        var info = stat()
+        return stat(url.path + "-wal", &info) != 0 && errno == ENOENT
+    }
+
     private func isSessionPath(_ url: URL) -> Bool {
         let root = sessionRoot.standardizedFileURL.path
         let path = url.standardizedFileURL.path
         return path == root || path.hasPrefix(root + "/")
     }
 
-    private func runningDesktopLaunchDate() async -> Date? {
-        await desktopLaunchDateProvider()
-    }
-
-    private func update(metadata: ActivityFileMetadata, previous: ActivityFileState?, sampledAt: Date, launchDate: Date?) -> ActivityFileState? {
+    private func update(metadata: ActivityFileMetadata, previous: ActivityFileState?, sampledAt: Date, launchDate: Date?) throws -> ActivityFileState {
         var state = previous ?? ActivityFileState(metadata: metadata)
-        let reset = previous == nil || metadata.size < state.offset || metadata.modifiedAt < state.modifiedAt
+        let reset = previous == nil || metadata.identity != previous?.metadata.identity
+            || metadata.size < state.offset || metadata.modifiedAt < state.modifiedAt
+            || (metadata.size == state.offset && metadata.modifiedAt != state.modifiedAt)
         if reset {
             state = ActivityFileState(metadata: metadata)
             // Skipping an old file also consumes its existing extent. Leaving
             // offset at zero would read that history as growth on the next poll.
             state.offset = metadata.size
             guard metadata.modifiedAt >= sampledAt.addingTimeInterval(-activeWindow) else { return state }
-            let data = readTail(url: URL(fileURLWithPath: metadata.path), size: metadata.size)
+            let data = try readTail(url: URL(fileURLWithPath: metadata.path, isDirectory: false), size: metadata.size)
             let result = CodexActivityParser.consume(data: data, state: &state, launchDate: launchDate)
             sampledParsedRecords += result.parsedRecords
             sampledParseFailures += result.parseFailures
@@ -267,11 +333,11 @@ public actor CodexActivityReader {
             let growth = metadata.size - state.offset
             if growth > Int64(maxTailBytes) {
                 state = ActivityFileState(metadata: metadata)
-                let result = CodexActivityParser.consume(data: readTail(url: URL(fileURLWithPath: metadata.path), size: metadata.size), state: &state, launchDate: launchDate)
+                let result = CodexActivityParser.consume(data: try readTail(url: URL(fileURLWithPath: metadata.path, isDirectory: false), size: metadata.size), state: &state, launchDate: launchDate)
                 sampledParsedRecords += result.parsedRecords
                 sampledParseFailures += result.parseFailures
             } else {
-                let data = readRange(url: URL(fileURLWithPath: metadata.path), offset: state.offset, length: growth)
+                let data = try readRange(url: URL(fileURLWithPath: metadata.path, isDirectory: false), offset: state.offset, length: growth)
                 let result = CodexActivityParser.consume(data: data, state: &state, launchDate: launchDate)
                 sampledParsedRecords += result.parsedRecords
                 sampledParseFailures += result.parseFailures
@@ -283,35 +349,22 @@ public actor CodexActivityReader {
         return state
     }
 
-    private func readTail(url: URL, size: Int64) -> Data {
+    private func readTail(url: URL, size: Int64) throws -> Data {
         let start = max(Int64(0), size - Int64(maxTailBytes))
-        return readRange(url: url, offset: start, length: size - start)
+        return try readRange(url: url, offset: start, length: size - start)
     }
 
-    private func readRange(url: URL, offset: Int64, length: Int64) -> Data {
+    private func readRange(url: URL, offset: Int64, length: Int64) throws -> Data {
         guard length > 0 else { return Data() }
-        guard let handle = try? FileHandle(forReadingFrom: url) else {
-            sampledUnreadableFiles += 1
-            return Data()
-        }
+        let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
-        do {
-            try handle.seek(toOffset: UInt64(max(0, offset)))
-            let data = try handle.read(upToCount: Int(min(length, Int64(maxTailBytes)))) ?? Data()
-            sampledBytesRead += data.count
-            return data
-        } catch {
-            sampledUnreadableFiles += 1
-            return Data()
-        }
-    }
-
-    private func trimCache(keeping paths: Set<String>) {
-        filesByPath = filesByPath.filter { paths.contains($0.key) }
-        if filesByPath.count > maxCachedFiles {
-            let excess = filesByPath.count - maxCachedFiles
-            for key in filesByPath.keys.sorted().prefix(excess) { filesByPath.removeValue(forKey: key) }
-        }
+        try handle.seek(toOffset: UInt64(max(0, offset)))
+        let data = try handle.read(upToCount: Int(min(length, Int64(maxTailBytes)))) ?? Data()
+        // Do not commit an offset past bytes actually read if a writer truncated
+        // or replaced the file between metadata acquisition and the read.
+        guard data.count == Int(min(length, Int64(maxTailBytes))) else { throw CocoaError(.fileReadUnknown) }
+        sampledBytesRead += data.count
+        return data
     }
 
     private func unavailable(at date: Date) -> CodexActivitySnapshot {
@@ -323,10 +376,24 @@ public actor CodexActivityReader {
     }
 }
 
+struct ActivityRefresh: Sendable {
+    let snapshot: CodexActivitySnapshot
+    var nextExpiry: Date? = nil
+    var catalogNeeded = false
+    var catalogUnavailable = false
+    var watchTargets: ActivityWatchTargets? = nil
+}
+
+struct ActivityFileIdentity: Sendable, Equatable {
+    let device: Int64
+    let inode: UInt64
+}
+
 struct ActivityFileMetadata: Sendable, Equatable {
     let path: String
     let size: Int64
     let modifiedAt: Date
+    var identity: ActivityFileIdentity? = nil
 }
 
 enum ActivityLifecycle: Sendable, Equatable { case unknown, active, idle }
@@ -354,6 +421,7 @@ enum CodexActivityParser {
         var parseFailures = 0
         state.pending.append(data)
         while let newline = state.pending.firstIndex(of: 10) {
+            if Task.isCancelled { break }
             let line = state.pending.prefix(upTo: newline)
             state.pending.removeSubrange(...newline)
             guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any] else {

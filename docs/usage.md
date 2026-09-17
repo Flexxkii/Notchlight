@@ -6,6 +6,21 @@ It uses AppKit’s display safe-area APIs and requires no extra dependency.
 
 The settings window includes five ruler-like ticks at 0%, 25%, 50%, 75%, and 100% of the border path. You can enable them, choose their color, and adjust thickness and length. Advanced controls set the outward offset, top padding, and opacity; notch spacing moves the border and ticks together.
 
+## Launch at login
+
+In **Settings → General**, check **Launch at login** to start Notchlight automatically
+when you log in to your Mac. Uncheck it to stop future automatic launches; the app
+keeps running until you quit it. This setting applies after signing in, rather than
+before login during boot.
+
+The checkbox reflects macOS's login-item status. If macOS needs approval, use
+**Open Login Items…** and allow Notchlight in System Settings. Returning to
+Notchlight refreshes the checkbox. Opening Settings or resetting appearance does
+not enable launch at login.
+
+Use the packaged, signed **Notchlight.app**, preferably in Applications, for this
+feature; `swift run` launches a bare executable instead of an app bundle.
+
 ## Appearance controls
 
 - **Start / End:** drag the sliders or type percentages from 0 to 100. On the notch, 0% is the top-left corner and 100% is the top-right, following the sides and bottom.
@@ -64,7 +79,7 @@ The app reads usage once per minute through the installed Codex CLI’s [local a
 
 Your color, line weight, and spacing stay adjustable while connected. Disconnecting restores your saved manual start, end, and glow settings.
 
-Activity is checked every two seconds using local Codex task lifecycle metadata (`task_started`, `task_complete`, and `turn_aborted`). Only lifecycle state and timestamps are retained. The app reads the local task catalog without changing it and checks whether the Codex desktop app is running. Completed and interrupted tasks stop the glow. Unresolved activity older than 15 minutes becomes unavailable and stops glowing. This activity source depends on Codex’s local file format; remote-only work or future format changes may not be detected.
+Activity follows file-change notifications using local Codex task lifecycle metadata (`task_started`, `task_complete`, and `turn_aborted`), with a safety check about once a minute. If file watching is unavailable, checks fall back to every two seconds. Only lifecycle state and timestamps are retained. The app reads the local task catalog without changing it and checks whether the Codex desktop app is running. If the catalog is temporarily unavailable, activity becomes unavailable and the app retries automatically, starting after one second and backing off to at most 30 seconds between retries. Completed and interrupted tasks stop the glow. Unresolved activity older than 15 minutes becomes unavailable and stops glowing. This activity source depends on Codex’s local file format; remote-only work or future format changes may not be detected.
 
 ## Performance diagnostics
 

@@ -20,6 +20,8 @@ public final class BorderOverlayController {
     private var menuPanelKey: String?
     private var currentMenu: NSMenu?
     private let spaceTransition = SpaceTransitionCoordinator()
+    private let menuHint = NotchMenuHintController()
+    private var sessionIsActive = true
     private var isStarted = false
     private var isEnabled = false
     private var lineWidth: CGFloat = 1
@@ -52,6 +54,7 @@ public final class BorderOverlayController {
     }
 
     isolated deinit {
+        menuHint.stop()
         if let globalMouseMonitor { NSEvent.removeMonitor(globalMouseMonitor) }
         if let localMouseMonitor { NSEvent.removeMonitor(localMouseMonitor) }
         swipeEventSession?.stop()
@@ -61,6 +64,11 @@ public final class BorderOverlayController {
             NotificationCenter.default.removeObserver(observer)
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
+    }
+
+    /// Offer only to a fresh install; the callback persists actual discovery.
+    public func offerNotchMenuHint(onComplete: @escaping () -> Void) {
+        menuHint.offer(onComplete: onComplete)
     }
 
     public func update(
@@ -164,6 +172,7 @@ public final class BorderOverlayController {
     }
 
     public func stop() {
+        menuHint.stop()
         isStarted = false
         isEnabled = false
         spaceTransition.cancel()
@@ -240,6 +249,7 @@ public final class BorderOverlayController {
               let panel = panels[key], let view = panel.contentView as? OverlayView,
               let menu = menuProvider?() else { return }
         menuPanelKey = key
+        menuHint.menuOpened()
         hoveredPanelKey = key
         currentMenu = menu
         diagnostics.updateContext(["menu": .string("shown")])
@@ -285,6 +295,9 @@ public final class BorderOverlayController {
                      NSWorkspace.sessionDidBecomeActiveNotification, NSWorkspace.accessibilityDisplayOptionsDidChangeNotification] {
             observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor [weak self] in
+                    if name != NSWorkspace.accessibilityDisplayOptionsDidChangeNotification {
+                        self?.sessionIsActive = true
+                    }
                     self?.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
                     self?.displaysChanged()
                     self?.refreshSwipeMonitoring()
@@ -298,7 +311,11 @@ public final class BorderOverlayController {
         })
         for name in [NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.willSleepNotification] {
             observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.handleSwipeUnavailable() }
+                MainActor.assumeIsolated {
+                    self?.sessionIsActive = false
+                    self?.menuHint.reconcile(target: nil)
+                    self?.handleSwipeUnavailable()
+                }
             })
         }
     }
@@ -341,6 +358,7 @@ public final class BorderOverlayController {
 
     private func applySpaceTransitionPhase(_ phase: SpaceTransitionCoordinator.Phase) {
         guard isStarted else { return }
+        if phase != .idle { menuHint.reconcile(target: nil) }
         diagnostics.updateContext(["swipe.transitionPhase": .string(phase.diagnosticName)])
         updateDiagnosticContext()
         switch phase {
@@ -368,6 +386,7 @@ public final class BorderOverlayController {
                 (panel.contentView as? OverlayView)?.setSpaceTransitionHidden(false, animated: true)
             }
             refreshHover()
+            synchronizeMenuHint()
         }
     }
 
@@ -451,7 +470,18 @@ public final class BorderOverlayController {
         }
         if let hoveredPanelKey, !activeKeys.contains(hoveredPanelKey) { self.hoveredPanelKey = nil }
         if panels.isEmpty { diagnostics.updateContext(["pulse.animationActive": .bool(false)]) }
+        synchronizeMenuHint()
         updateDiagnosticContext()
+    }
+
+    private func synchronizeMenuHint() {
+        guard isStarted, sessionIsActive, spaceTransition.phase == .idle, menuPanelKey == nil,
+              let screen = NSScreen.screens.first(where: { notch(for: $0) != nil }),
+              let notch = notch(for: screen), panels[panelKey(for: screen)] != nil else {
+            menuHint.reconcile(target: nil)
+            return
+        }
+        menuHint.reconcile(target: .init(notch: notch.rect, screen: screen.frame))
     }
 
     private func removeAllPanels() {

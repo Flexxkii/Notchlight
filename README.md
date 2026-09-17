@@ -7,27 +7,89 @@ customizable status light. See your Codex usage at a glance, follow its activity
 or simply give your notch a border in a color you like.
 
 [Download the latest release](https://github.com/Flexxkii/notchlight/releases/latest)
+· [Features](#features)
 · [Usage guide](docs/usage.md)
+· [Changelog](CHANGELOG.md)
 · [License](LICENSE)
 · [Privacy](PRIVACY.md)
 
 ![Notchlight settings and live border preview](docs/images/notchlight-settings-dark.png)
 
-## What it does
+## Features
 
-- **Usage around the notch.** Connect your existing Codex installation to show
-  the percentage of your five-hour or weekly allowance used or remaining.
-  Choose **Usage display → Remaining** in Settings to show what's left.
-- **Activity you can see.** A configurable working color and gentle glow mark
-  local Codex activity. Optionally hide the border when idle, with a timeout.
-- **Details on hover.** Hover for the usage percentage and reset date; click the
-  border to open its native menu.
-- **Make it yours.** Adjust start/end percentages, color, line weight, spacing,
-  glow, ruler ticks, and hover appearance. Changes apply immediately.
-- **Native behavior.** Automatic notch geometry, support for multiple notched
-  displays, resizable settings, system appearance, and Reduce Motion support.
-- **Local diagnostics.** Inspect or export CPU, memory, and activity measurements
-  without an automatic upload.
+### Codex usage and activity
+
+- **Usage border:** the line around your notch shows your Codex allowance as
+  **Used** or **Remaining**. The same choice applies to the preview, Settings,
+  hover details, and notch menu.
+- **Usage windows:** choose **5-hour**, **Weekly**, or **Automatic**, which
+  prefers the five-hour window, then weekly, then another available limit.
+- **Automatic and manual refresh:** usage refreshes about once per minute,
+  with a Refresh button in Settings. Failed refreshes preserve the last known
+  value and show a warning; missing usage is labeled unavailable.
+- **Activity indicator:** local Codex activity switches the border to your
+  chosen working color and adds a gently pulsing glow. The glow stops when
+  work ends; Reduce Motion keeps it static while working.
+- **Show only while working:** optionally hide the border and ruler ticks
+  after Codex becomes idle. Choose immediately or a delay of 1, 5, 10, 30, or
+  60 minutes. New activity brings them back.
+- **Optional connection:** use your installed Codex CLI and existing sign-in.
+  Disconnecting restores your saved manual border range and glow settings.
+
+### Notch interactions
+
+- **Hover details:** the notch expands horizontally to show the selected usage
+  percentage and reset date/time. Adjust the hover text size in Settings.
+- **Native context menu:** left-click or right-click the notch to connect or
+  disconnect Codex, show or hide the border, open Settings, export diagnostics,
+  or quit. Hover details and the menu remain available when the border is hidden.
+- **First-run hint:** new users see an animated arrow and “Click your notch”
+  callout. It disappears when the menu opens, when dismissed, or after 12 seconds.
+  Completion is remembered across launches; existing installations skip it.
+- **Keyboard shortcuts:** use **⌘,** for Settings, **⌘⇧B** to toggle the border,
+  and **⌘Q** to quit while the app or its menu is active.
+
+### Appearance and preview
+
+- **Manual line range:** without Codex connected, set the start and end from
+  0–100%. The path runs from the top-left corner, around the notch, to the
+  top-right corner.
+- **Border styling:** choose a custom color or a red, orange, green, blue,
+  purple, or white preset. Adjust line weight, notch spacing, and manual soft
+  glow, with a separate color for Codex activity.
+- **Ruler ticks:** show markers at 0%, 25%, 50%, 75%, and 100%. Customize their
+  color, thickness, length, outward offset, top padding, and opacity.
+- **Live preview:** see appearance changes immediately in the Settings notch
+  preview and on your display. Preferences are saved locally across launches.
+- **Reset controls:** restore all appearance defaults or reset only the ruler
+  ticks. Appearance reset preserves your Codex connection and usage-display choice.
+
+### macOS integration
+
+- **Launch at login:** start Notchlight automatically when you sign in to your
+  Mac. Enable it in **Settings → General**; the checkbox follows macOS's
+  login-item status and guides you to System Settings if approval is needed.
+- **Automatic notch detection:** follow the physical notch geometry on each
+  compatible display and update when the display configuration changes.
+- **Desktop transitions:** the overlay follows Spaces and full-screen apps.
+  Optional **Hide when swiping** conceals it during desktop swipes and restores
+  it afterward; standard desktop-transition handling remains available without
+  Input Monitoring permission.
+- **Background operation:** close Settings and keep the notch overlay running.
+  The overlay does not take keyboard focus, and clicks outside its interaction
+  region pass through to other apps.
+- **Native Settings and accessibility:** resizable, scrollable Settings follow
+  light or dark appearance, with labeled controls and Reduce Motion support.
+  The first-run hint also adapts to Reduce Transparency and increased contrast.
+
+### Diagnostics and offline information
+
+- **Local performance diagnostics:** enable or disable recording, reveal the
+  log folder, or export a ZIP with a readable report and measurements such as
+  CPU, memory, disk I/O, wakeups, and app activity. Exporting does not upload it.
+- **Offline legal documents:** read the license, terms of use, privacy policy,
+  and third-party notices from **Settings → License & terms** or the
+  **About Notchlight & Legal…** application-menu item.
 
 The app is independent of Apple and OpenAI. Codex is optional: manual border
 controls work without a Codex account. The Codex integration uses your installed
@@ -36,7 +98,7 @@ CLI and existing sign-in; it does not include a subscription or extra usage.
 ## Download and install
 
 1. Open [Releases](https://github.com/Flexxkii/notchlight/releases).
-2. Download `Notchlight-1.0.3-macOS-arm64.zip`, then unzip it.
+2. Download `Notchlight-1.1.0-macOS-arm64.zip`, then unzip it.
 3. Move `Notchlight.app` to Applications and open it.
 4. Adjust the border, or enable **Connect to Codex** if Codex is installed and
    signed in on your Mac.
@@ -59,7 +121,7 @@ The repository and its releases are public.
 | --- | --- |
 | Operating system | macOS 14 or later |
 | Visible notch border | A supported notched MacBook display |
-| Published 1.0.3 build | Apple Silicon (`arm64`) |
+| Published 1.1.0 build | Apple Silicon (`arm64`) |
 | Optional Codex features | Installed Codex CLI/desktop app and an existing compatible sign-in |
 | Building from source | Full Xcode 26+ with Swift 6.2+ and Icon Composer asset compilation |
 
@@ -67,8 +129,9 @@ The minimum deployment target is macOS 14, but this release was built and checke
 on macOS 27 with Xcode 27. Runtime behavior on macOS 14 and 26 has not been
 verified. Intel builds are not included or tested.
 
-Account usage normally refreshes once per minute; local activity is checked
-approximately every two seconds. Missing usage is shown as unavailable, not 0%.
+Account usage normally refreshes once per minute. Local activity follows file
+changes, with a safety check about once per minute and a two-second polling
+fallback if file watching is unavailable. Missing usage is shown as unavailable, not 0%.
 Local Codex formats can change, and remote-only activity may not be detected.
 Use Codex itself as the authority for billing, limits, and task completion.
 

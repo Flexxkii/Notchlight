@@ -11,6 +11,7 @@ struct SettingsView: View {
                 SettingsHeaderView()
 
                 BorderPreview(model: model, isWindowVisible: windowState.canAnimate)
+                LaunchAtLoginSettingsView()
                 CodexConnectionView(model: model)
                 HoverAppearanceControls(model: model)
                 BorderAppearanceControls(model: model)

@@ -171,8 +171,15 @@ final class BorderModel {
         self.defaults = defaults
         integrationAllowed = startIntegration
         overlayAllowed = startOverlay
+        var hasUsedAppBefore = defaults.object(forKey: "notchlight.legacyMigration.v1") != nil
         if defaults === UserDefaults.standard {
             Self.migrateLegacyDefaultsIfNeeded(to: defaults, destinationDomainName: Bundle.main.bundleIdentifier ?? "com.teodor.Notchlight")
+            let persisted = defaults.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "com.teodor.Notchlight") ?? [:]
+            hasUsedAppBefore = hasUsedAppBefore || NotchMenuHintEligibility.hasExistingPreferences(in: persisted)
+        }
+        let menuHintEligibility = NotchMenuHintEligibility(defaults: defaults, hasUsedAppBefore: hasUsedAppBefore)
+        if startOverlay, menuHintEligibility.shouldOffer {
+            overlay.offerNotchMenuHint { menuHintEligibility.complete() }
         }
         defaults.register(defaults: [
             "border.enabled": true,

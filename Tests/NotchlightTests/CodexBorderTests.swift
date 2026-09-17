@@ -7,6 +7,22 @@ import Testing
 
 @MainActor
 struct CodexBorderTests {
+    @Test("timestamp-only activity changes do not invalidate the monitor")
+    func unchangedActivity() {
+        let monitor = CodexMonitor()
+        var changes = 0
+        monitor.onChange = { changes += 1 }
+        let original = snapshot(working: true)
+        monitor.recordActivity(original)
+        monitor.recordActivity(CodexActivitySnapshot(isWorking: true, activeTaskCount: 1,
+            isAvailable: true, detail: original.detail, sampledAt: original.sampledAt.addingTimeInterval(60)))
+        #expect(changes == 1)
+        #expect(monitor.activity?.sampledAt == original.sampledAt)
+        monitor.recordActivity(CodexActivitySnapshot(isWorking: true, activeTaskCount: 2,
+            isAvailable: true, detail: original.detail, sampledAt: .now))
+        #expect(changes == 2)
+    }
+
     @Test("model grace timer expires and a later idle transition gets a fresh window")
     func modelGraceExpiryAndReactivation() async throws {
         let (model, defaults, suite) = makeVisibilityModel(timeout: 0.002)
