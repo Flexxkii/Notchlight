@@ -1,21 +1,31 @@
 import Foundation
 
 enum CodexExecutable {
-    static func locate() -> URL? {
-        var candidates = [
-            "/Applications/ChatGPT.app/Contents/Resources/codex",
-            "/Applications/Codex.app/Contents/Resources/codex",
-            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/ChatGPT.app/Contents/Resources/codex").path,
-            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Codex.app/Contents/Resources/codex").path,
+    static func locate(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        searchPath: String? = ProcessInfo.processInfo.environment["PATH"],
+        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> URL? {
+        let applicationDirectories = [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            homeDirectory.appendingPathComponent("Applications", isDirectory: true)
+        ]
+        var candidates = applicationDirectories.flatMap { directory in
+            ["ChatGPT.app", "Codex.app"].flatMap { app in
+                // Prefer the packaged launcher so the CLI's internal bundle can move.
+                ["codex-cli/bin/codex", "codex"].map { executable in
+                    directory.appendingPathComponent("\(app)/Contents/Resources/\(executable)").path
+                }
+            }
+        }
+        candidates += [
             "/opt/homebrew/bin/codex",
             "/usr/local/bin/codex",
             "/usr/bin/codex"
         ]
-        if let path = ProcessInfo.processInfo.environment["PATH"] {
-            candidates.append(contentsOf: path.split(separator: ":").map { "\($0)/codex" })
+        if let searchPath {
+            candidates.append(contentsOf: searchPath.split(separator: ":").map { "\($0)/codex" })
         }
-        return candidates.lazy.map { URL(fileURLWithPath: $0) }.first {
-            FileManager.default.isExecutableFile(atPath: $0.path)
-        }
+        return candidates.first(where: isExecutable).map { URL(fileURLWithPath: $0) }
     }
 }

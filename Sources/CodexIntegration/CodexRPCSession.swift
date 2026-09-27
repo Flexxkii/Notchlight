@@ -59,7 +59,7 @@ final class CodexRPCSession: @unchecked Sendable {
             ])
         }
         let deadline = Date().addingTimeInterval(timeoutOverride ?? Self.timeout)
-        _ = try request(["method": "initialize", "params": ["clientInfo": ["name": "notchlight", "title": "Notchlight", "version": "1.1.0"], "capabilities": ["experimentalApi": false]]], operation: .rpcInitialize, process: process, input: input, collector: collector, deadline: deadline, launchID: launchID, pid: pid, expectedStartIdentity: startIdentity)
+        _ = try request(["method": "initialize", "params": ["clientInfo": ["name": "notchlight", "title": "Notchlight", "version": "1.1.1"], "capabilities": ["experimentalApi": false]]], operation: .rpcInitialize, process: process, input: input, collector: collector, deadline: deadline, launchID: launchID, pid: pid, expectedStartIdentity: startIdentity)
         try send(["method": "initialized", "params": [:]], input: input)
         let account = try request(["method": "account/read", "params": ["refreshToken": false]], operation: .rpcAccount, process: process, input: input, collector: collector, deadline: deadline, launchID: launchID, pid: pid, expectedStartIdentity: startIdentity)
         guard let accountInfo = account["account"] as? [String: Any] else { throw CodexUsageError.signInRequired }
