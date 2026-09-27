@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.1](https://github.com/Flexxkii/notchlight/releases/tag/v1.1.1) — 2026-09-27
+
+### Fixed
+
+- Restored Codex usage refreshes with desktop app versions that package their
+  CLI under `Contents/Resources/codex-cli/bin/codex`. Notchlight now finds this
+  launcher in both ChatGPT and Codex app bundles, including per-user installs.
+- Kept support for the previous bundled executable location, standalone CLI
+  installations, and executables on `PATH`.
+
+[Release notes and download details](docs/releases/1.1.1.md)
+· [All changes since 1.1.0](https://github.com/Flexxkii/notchlight/compare/v1.1.0...v1.1.1)
+
 ## [1.1.0](https://github.com/Flexxkii/notchlight/releases/tag/v1.1.0) — 2026-09-17
 
 Notchlight now fits more naturally into your day, with automatic startup,
