@@ -1,6 +1,6 @@
 # Notchlight privacy policy
 
-Version 1.0 · Effective 16 September 2026
+Version 1.1 · Effective 18 September 2026
 Maintainer: Flexxkii (https://github.com/Flexxkii)
 Contact: https://github.com/Flexxkii/notchlight/issues
 
@@ -26,6 +26,11 @@ responses may pass through process memory; Notchlight does not retain account
 identifiers in its diagnostic logs. It does not directly open or store Codex
 authentication tokens and does not make model-generation requests.
 
+To discard values after account changes, the host watches authentication-file
+metadata (such as replacement and modification times) without reading its token
+contents. It also keeps a hash of the account response's email in memory for
+comparison across reads. This hash is not saved in the widget or diagnostic logs.
+
 To infer whether Codex is working, Notchlight checks whether the desktop app is
 running, reads its local task catalog, and examines local session files under
 CODEX_HOME or ~/.codex. Those files can contain conversation content. The reader
@@ -33,8 +38,31 @@ examines file data in memory to locate lifecycle events; it retains lifecycle
 state and timestamps, not conversation text or task titles. This is read-only
 access to the Codex catalog and session files. It may not detect remote-only work.
 
-Usage normally refreshes once per minute and activity approximately every two
-seconds. Turning off Connect to Codex or quitting stops that monitoring.
+Usage refreshes about once per minute while working or recovering from an error,
+and every five minutes during healthy idle. Activity follows local file changes,
+with a safety check about once per minute and a two-second polling fallback if
+file notifications are unavailable. Turning off Connect to Codex or quitting
+stops that monitoring.
+
+## Desktop widgets
+
+When built with a supported signing identity, the host saves a small, versioned
+usage snapshot in its macOS app-group container. It contains allowance percentages,
+durations, reset dates, sample times, the selected window, connection state, and
+recent activity status. The sandboxed widget reads this local snapshot. It does
+not run Codex or access credentials, account identifiers, conversation content,
+or session files. WidgetKit controls when the widget refreshes.
+
+The last snapshot remains after quitting so the widget can display explicitly
+stale data. Disconnecting replaces it with an empty disconnected state. Account
+changes detected while the host is running discard cached usage; startup also
+clears the previous snapshot before reading the current account. While the host
+is stopped, it cannot detect an account change, and the widget labels expired
+values stale. macOS may retain rendered widget timelines until it refreshes them.
+
+To remove the saved snapshot, disconnect in Notchlight and quit. The snapshot
+file is `NotchlightWidgets/usage-v1.json` inside the app's group container under
+`~/Library/Group Containers/<signing-team>.com.teodor.Notchlight.shared/`.
 
 ## Optional Input Monitoring
 

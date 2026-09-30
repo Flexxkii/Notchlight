@@ -12,12 +12,15 @@ let package = Package(
         .target(name: "Diagnostics"),
         .target(name: "BorderOverlay", dependencies: ["Diagnostics"]),
         .target(name: "CodexIntegration", dependencies: ["Diagnostics"]),
-        .executableTarget(name: "Notchlight", dependencies: ["BorderOverlay", "CodexIntegration", "Diagnostics"],
+        .target(name: "WidgetShared"),
+        .target(name: "WidgetViews", dependencies: ["WidgetShared"]),
+        .executableTarget(name: "Notchlight", dependencies: ["BorderOverlay", "CodexIntegration", "Diagnostics", "WidgetShared"],
                           resources: [.copy("Resources/Legal")]),
         .testTarget(name: "BorderOverlayTests", dependencies: ["BorderOverlay"]),
         .testTarget(name: "NotchlightTests", dependencies: ["Notchlight"]),
         .testTarget(name: "CodexIntegrationTests", dependencies: ["CodexIntegration"]),
-        .testTarget(name: "DiagnosticsTests", dependencies: ["Diagnostics"])
+        .testTarget(name: "DiagnosticsTests", dependencies: ["Diagnostics"]),
+        .testTarget(name: "WidgetSharedTests", dependencies: ["WidgetShared"])
     ],
     swiftLanguageModes: [.v6]
 )

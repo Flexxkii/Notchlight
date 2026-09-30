@@ -261,7 +261,10 @@ public final class BorderOverlayController {
             MainActor.assumeIsolated { self?.finishMenuTracking() }
         }
         let point = CGPoint(x: view.collapsedHitRect.midX, y: view.collapsedHitRect.minY - 4)
-        let shown = menu.popUp(positioning: nil, at: point, in: view)
+        // Window-backed menu tracking asks AppKit to make the passive panel key.
+        // A screen-positioned menu keeps tracking independent of panel focus.
+        let screenPoint = panel.convertPoint(toScreen: view.convert(point, to: nil))
+        let shown = menu.popUp(positioning: nil, at: screenPoint, in: nil)
         // popUp tracks synchronously; the notification normally clears this first.
         if !shown || menuPanelKey != nil { finishMenuTracking() }
     }

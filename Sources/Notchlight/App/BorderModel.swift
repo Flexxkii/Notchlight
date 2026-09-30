@@ -9,6 +9,7 @@ import Diagnostics
 final class BorderModel {
     let codex: CodexMonitor
     @ObservationIgnored let diagnostics: DiagnosticRecorder
+    @ObservationIgnored private let widgetPublisher: WidgetSnapshotPublisher?
     var codexLinked: Bool {
         didSet {
             if integrationAllowed {
@@ -166,6 +167,7 @@ final class BorderModel {
     init(defaults: UserDefaults = .standard, startIntegration: Bool = true, startOverlay: Bool = true,
          diagnostics: DiagnosticRecorder = .disabled) {
         self.diagnostics = diagnostics
+        widgetPublisher = startIntegration ? WidgetSnapshotPublisher(diagnostics: diagnostics) : nil
         codex = CodexMonitor(diagnostics: diagnostics)
         overlay = BorderOverlayController(diagnostics: diagnostics)
         self.defaults = defaults
@@ -257,7 +259,9 @@ final class BorderModel {
         }
         overlay.menuProvider = { [weak self] in self?.notchMenuController.makeMenu() ?? NSMenu() }
         codex.onChange = { [weak self] in self?.handleCodexChange() }
+        codex.onWidgetChange = { [weak self] in self?.publishWidgetSnapshot() }
         apply()
+        publishWidgetSnapshot()
         if codexLinked && startIntegration { codex.start() }
     }
 
@@ -334,6 +338,7 @@ final class BorderModel {
         defaults.set(codexLinked, forKey: "codex.linked")
         defaults.set(codexWindow.rawValue, forKey: "codex.window")
         defaults.set(codexUsageDisplay.rawValue, forKey: "codex.usageDisplay")
+        publishWidgetSnapshot()
         apply()
     }
 
@@ -389,6 +394,7 @@ final class BorderModel {
 
     private func handleCodexChange() {
         guard !servicesStopped else { return }
+        publishWidgetSnapshot()
         let working = codexLinked && codex.isWorking
         if !codexLinked || working {
             clearActivityHistory()
@@ -400,6 +406,11 @@ final class BorderModel {
         // original idle timestamp and its pending deadline untouched.
         lastActivityWasWorking = working
         apply()
+    }
+
+    private func publishWidgetSnapshot() {
+        guard !servicesStopped else { return }
+        widgetPublisher?.publish(linked: codexLinked, monitor: codex, selected: codexWindow)
     }
 
     private func reconcileActivityVisibility() {

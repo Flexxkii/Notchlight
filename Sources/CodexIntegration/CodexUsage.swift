@@ -5,12 +5,14 @@ public enum CodexUsageWindow: String, CaseIterable, Identifiable, Sendable {
     case automatic
     case fiveHour
     case weekly
+    case monthly
 
     public var title: String {
         switch self {
         case .automatic: "Automatic"
         case .fiveHour: "5-hour"
         case .weekly: "Weekly"
+        case .monthly: "Monthly"
         }
     }
 
@@ -21,18 +23,27 @@ public struct CodexUsageValue: Sendable, Equatable {
     public let usedPercent: Double
     public let windowDurationMins: Int
     public let resetsAt: Date?
+    /// Only set by a source that explicitly identifies calendar-month semantics.
+    /// The current app-server duration-only schema cannot establish this.
+    public let isCalendarMonth: Bool
 
-    public init(usedPercent: Double, windowDurationMins: Int, resetsAt: Date?) {
+    public init(usedPercent: Double, windowDurationMins: Int, resetsAt: Date?, isCalendarMonth: Bool = false) {
         self.usedPercent = usedPercent
         self.windowDurationMins = windowDurationMins
         self.resetsAt = resetsAt
+        self.isCalendarMonth = isCalendarMonth
     }
 
     public var title: String {
+        if isCalendarMonth { return "Monthly" }
         switch windowDurationMins {
-        case 300: "5-hour"
-        case 10_080: "Weekly"
-        default: "Usage"
+        case 300: return "5-hour"
+        case 10_080: return "Weekly"
+        case let minutes where minutes > 0 && minutes.isMultiple(of: 1_440):
+            return "\(minutes / 1_440)-day"
+        case let minutes where minutes > 0 && minutes.isMultiple(of: 60):
+            return "\(minutes / 60)-hour"
+        default: return "\(windowDurationMins)-minute"
         }
     }
 }
@@ -56,11 +67,13 @@ public struct CodexUsageSnapshot: Sendable {
             windows.first(where: { $0.windowDurationMins == 300 })
         case .weekly:
             windows.first(where: { $0.windowDurationMins == 10_080 })
+        case .monthly:
+            windows.first(where: \.isCalendarMonth)
         }
     }
 }
 
-public enum CodexUsageError: Error, LocalizedError, Sendable {
+public enum CodexUsageError: Error, LocalizedError, Sendable, Equatable {
     case executableUnavailable
     case launchFailed
     case timedOut
@@ -124,7 +137,7 @@ enum CodexUsageParser {
     private static func parseValue(_ dictionary: [String: Any]) -> CodexUsageValue? {
         guard let used = number(dictionary["usedPercent"]), used.isFinite,
               let duration = integer(dictionary["windowDurationMins"]),
-              duration == 300 || duration == 10_080 else { return nil }
+              duration > 0 else { return nil }
         let reset = date(dictionary["resetsAt"])
         return CodexUsageValue(usedPercent: min(max(used, 0), 100),
                                windowDurationMins: duration,
@@ -160,10 +173,21 @@ public actor CodexUsageReader {
     }
 
     public func read() async throws -> CodexUsageSnapshot {
+        try await readAccountAware().usage.get()
+    }
+
+    public func readAccountAware() async -> CodexUsageReadResult {
         let token = CodexCancellationToken()
-        return try await withTaskCancellationHandler(operation: {
-            try await Task.detached {
-                try CodexRPCSession(cancellation: token, diagnostics: self.diagnostics).readSnapshot()
+        return await withTaskCancellationHandler(operation: {
+            await Task.detached {
+                let session = CodexRPCSession(cancellation: token, diagnostics: self.diagnostics)
+                do {
+                    let snapshot = try session.readSnapshot()
+                    return CodexUsageReadResult(accountFingerprint: session.accountFingerprint, usage: .success(snapshot))
+                } catch {
+                    return CodexUsageReadResult(accountFingerprint: session.accountFingerprint,
+                                               usage: .failure(error as? CodexUsageError ?? .protocolFailure))
+                }
             }.value
         }, onCancel: { token.cancel() })
     }

@@ -33,6 +33,7 @@ public actor CodexActivityReader {
     private var desktopLaunchDate: Date?
     private var sourceAvailable = false
     private var catalogAvailable = false
+    private var catalogWaitingForWAL = false
     private var catalogWatchPaths: Set<String> = []
     private var unreadablePaths: Set<String> = []
     private var sampledBytesRead = 0
@@ -117,30 +118,37 @@ public actor CodexActivityReader {
             desktopLaunchDate = launchDate
             filesByPath.removeAll()
             unreadablePaths.removeAll()
+            rolloutPaths.removeAll()
+            catalogAvailable = false
         }
         var selected = paths ?? Set(rolloutPaths.map(\.path))
         let unknownPath = paths?.contains { path in !rolloutPaths.contains { $0.path == path } } == true
         let needsCatalog = refreshCatalog || restarted
         if needsCatalog {
             let recoveringCatalog = !catalogAvailable
+            catalogWaitingForWAL = false
             let discovery = diagnostics.beginInterval(.databaseDiscovery)
             let dbURL = latestStateDatabase()
             diagnostics.endInterval(discovery, outcome: dbURL == nil ? .unavailable : .success)
-            guard let dbURL, let catalog = queryRolloutPaths(from: dbURL) else {
-                sourceAvailable = false
+            if let dbURL, let catalog = queryRolloutPaths(from: dbURL) {
+                rolloutPaths = catalog
+                catalogWatchPaths = [dbURL.path, dbURL.path + "-wal"]
+                catalogAvailable = true
+                let allowed = Set(catalog.map(\.path))
+                filesByPath = filesByPath.filter { allowed.contains($0.key) }
+                unreadablePaths.formIntersection(allowed)
+                selected.formUnion(recoveringCatalog ? allowed : allowed.subtracting(filesByPath.keys))
+            } else {
                 catalogAvailable = false
                 outcome = .unavailable
-                return ActivityRefresh(snapshot: unavailable(at: now), catalogUnavailable: true)
+                // A writer can briefly remove its WAL during a checkpoint. Keep
+                // reading known session files during that gap; restart, schema
+                // failures and a missing initial catalog still fail closed.
+                guard catalogWaitingForWAL, !rolloutPaths.isEmpty else {
+                    sourceAvailable = false
+                    return ActivityRefresh(snapshot: unavailable(at: now), catalogUnavailable: true)
+                }
             }
-            rolloutPaths = catalog
-            catalogWatchPaths = [dbURL.path, dbURL.path + "-wal"]
-            catalogAvailable = true
-            let allowed = Set(catalog.map(\.path))
-            filesByPath = filesByPath.filter { allowed.contains($0.key) }
-            unreadablePaths.formIntersection(allowed)
-            // A new catalog entry always needs its initial state, even if its file event
-            // arrived before the transaction that registered it in SQLite.
-            selected.formUnion(recoveringCatalog ? allowed : allowed.subtracting(filesByPath.keys))
         }
         if paths == nil || restarted { selected = Set(rolloutPaths.map(\.path)) }
         let allowed = Set(rolloutPaths.map(\.path))
@@ -174,7 +182,7 @@ public actor CodexActivityReader {
                 unreadablePaths.insert(path)
             }
         }
-        sourceAvailable = catalogAvailable
+        sourceAvailable = catalogAvailable || (catalogWaitingForWAL && !rolloutPaths.isEmpty)
         if !sourceAvailable { outcome = .unavailable }
         let result = reclassify(now: now)
         return ActivityRefresh(snapshot: result.snapshot, nextExpiry: result.nextExpiry,
@@ -233,6 +241,7 @@ public actor CodexActivityReader {
     }
 
     private func queryRolloutPaths(from url: URL) -> [URL]? {
+        catalogWaitingForWAL = false
         let interval = diagnostics.beginInterval(.databaseQuery)
         var succeeded = false
         var fields: [String: DiagnosticValue] = [:]
@@ -242,6 +251,7 @@ public actor CodexActivityReader {
         // open it (and flooding the system log). Never ignore a live WAL using
         // immutable=1, or create/checkpoint Codex's database ourselves.
         if isWaitingForWAL(at: url) {
+            catalogWaitingForWAL = true
             fields["errorCategory"] = .string("walUnavailable")
             return nil
         }
@@ -325,15 +335,20 @@ public actor CodexActivityReader {
             // offset at zero would read that history as growth on the next poll.
             state.offset = metadata.size
             guard metadata.modifiedAt >= sampledAt.addingTimeInterval(-activeWindow) else { return state }
-            let data = try readTail(url: URL(fileURLWithPath: metadata.path, isDirectory: false), size: metadata.size)
+            let data = try readTail(url: URL(fileURLWithPath: metadata.path, isDirectory: false), size: metadata.size, state: &state)
             let result = CodexActivityParser.consume(data: data, state: &state, launchDate: launchDate)
             sampledParsedRecords += result.parsedRecords
             sampledParseFailures += result.parseFailures
         } else if metadata.size > state.offset {
             let growth = metadata.size - state.offset
             if growth > Int64(maxTailBytes) {
-                state = ActivityFileState(metadata: metadata)
-                let result = CodexActivityParser.consume(data: try readTail(url: URL(fileURLWithPath: metadata.path, isDirectory: false), size: metadata.size), state: &state, launchDate: launchDate)
+                // Retain the last known lifecycle when a large non-lifecycle
+                // record pushes its start outside the bounded tail. Its original
+                // freshness deadline still applies; replacement resets above.
+                state.pending.removeAll()
+                state.discardingPartialLine = false
+                let data = try readTail(url: URL(fileURLWithPath: metadata.path, isDirectory: false), size: metadata.size, state: &state)
+                let result = CodexActivityParser.consume(data: data, state: &state, launchDate: launchDate)
                 sampledParsedRecords += result.parsedRecords
                 sampledParseFailures += result.parseFailures
             } else {
@@ -349,9 +364,19 @@ public actor CodexActivityReader {
         return state
     }
 
-    private func readTail(url: URL, size: Int64) throws -> Data {
+    private func readTail(url: URL, size: Int64, state: inout ActivityFileState) throws -> Data {
         let start = max(Int64(0), size - Int64(maxTailBytes))
-        return try readRange(url: url, offset: start, length: size - start)
+        let data = try readRange(url: url, offset: start, length: size - start)
+        guard start > 0 else { return data }
+        let preceding = try readRange(url: url, offset: start - 1, length: 1)
+        guard preceding.first != 10 else { return data }
+        // A bounded tail usually starts inside a JSON record. This fragment is
+        // not malformed source data and must never be passed to the parser.
+        guard let newline = data.firstIndex(of: 10) else {
+            state.discardingPartialLine = true
+            return Data()
+        }
+        return Data(data.suffix(from: data.index(after: newline)))
     }
 
     private func readRange(url: URL, offset: Int64, length: Int64) throws -> Data {
@@ -402,6 +427,7 @@ struct ActivityFileState: Sendable, Equatable {
     var metadata: ActivityFileMetadata
     var offset: Int64 = 0
     var pending = Data()
+    var discardingPartialLine = false
     var lifecycle: ActivityLifecycle = .unknown
     var modifiedAt: Date
     var lastLifecycleAt: Date?
@@ -419,7 +445,15 @@ enum CodexActivityParser {
     static func consume(data: Data, state: inout ActivityFileState, launchDate: Date?) -> ParseResult {
         var parsedRecords = 0
         var parseFailures = 0
-        state.pending.append(data)
+        var incoming = data
+        if state.discardingPartialLine {
+            guard let newline = incoming.firstIndex(of: 10) else {
+                return ParseResult(parsedRecords: 0, parseFailures: 0)
+            }
+            incoming = Data(incoming.suffix(from: incoming.index(after: newline)))
+            state.discardingPartialLine = false
+        }
+        state.pending.append(incoming)
         while let newline = state.pending.firstIndex(of: 10) {
             if Task.isCancelled { break }
             let line = state.pending.prefix(upTo: newline)
@@ -454,7 +488,10 @@ enum CodexActivityParser {
                 break
             }
         }
-        if state.pending.count > 64 * 1024 { state.pending.removeAll(keepingCapacity: false) }
+        if state.pending.count > 64 * 1024 {
+            state.pending.removeAll(keepingCapacity: false)
+            state.discardingPartialLine = true
+        }
         return ParseResult(parsedRecords: parsedRecords, parseFailures: parseFailures)
     }
 

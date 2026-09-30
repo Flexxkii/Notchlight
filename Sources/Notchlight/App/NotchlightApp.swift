@@ -27,6 +27,10 @@ struct NotchlightApp: App {
                         diagnostics.shutdown()
                     }
                     appDelegate.onReopen = model.showSettings
+                    appDelegate.onOpenUsage = {
+                        model.showSettings()
+                        model.codex.refresh()
+                    }
                 }
         }
         .windowResizability(.contentMinSize)

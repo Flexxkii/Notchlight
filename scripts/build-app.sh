@@ -74,9 +74,12 @@ for legal_file in LICENSE TERMS.md PRIVACY.md THIRD_PARTY_NOTICES.md; do
 done
 plutil -lint "${CONTENTS_DIR}/Info.plist"
 
+"${SCRIPT_DIR}/build-widgets.sh" "$APP_DIR"
+
 if [[ -n "${NOTCHLIGHT_SIGNING_IDENTITY:-}" ]]; then
     print "Signing with the supplied distribution identity..."
-    codesign --force --options runtime --timestamp --sign "$NOTCHLIGHT_SIGNING_IDENTITY" "$APP_DIR"
+    codesign --force --options runtime --timestamp --sign "$NOTCHLIGHT_SIGNING_IDENTITY" \
+        --entitlements "${BUILD_DIR}/widget-extension/host.entitlements" "$APP_DIR"
 else
     print "Signing locally with an ad-hoc signature (not notarized)..."
     codesign --force --sign - "$APP_DIR"

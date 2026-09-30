@@ -250,6 +250,66 @@ struct ActivityObservationTests {
         #expect(try f.reads().count == count)
     }
 
+    @Test("known sessions stay live through a missing WAL and consume completion")
+    func cachedCatalogSurvivesWALGap() async throws {
+        let f = try Fixture()
+        defer { f.close() }
+        try await f.start()
+        try f.append("task_started"); f.emit()
+        try await wait { f.values.last?.isWorking == true }
+        try f.sql("PRAGMA journal_mode=WAL")
+        #expect(!FileManager.default.fileExists(atPath: f.root.appendingPathComponent("state_1.sqlite-wal").path))
+        f.watcher.emit(ActivityFileChanges(catalog: true))
+        try await wait { (try? f.reads(operation: "databaseQuery").last?["errorCategory"] as? String) == "walUnavailable" }
+        #expect(f.values.last?.isWorking == true)
+        #expect(f.values.last?.isAvailable == true)
+        try f.append("task_complete"); f.emit()
+        try await wait { f.values.last?.isWorking == false }
+        #expect(f.values.last?.isAvailable == true)
+        // Restart must not reuse the previous desktop's cached catalog.
+        await f.desktop.set(Date())
+        f.observation.environmentChanged(.desktopChanged)
+        try await wait { f.values.last?.isAvailable == false }
+    }
+
+    @Test("catalog churn is coalesced while existing session events remain prompt")
+    func catalogCoalescing() async throws {
+        var timing = Fixture.timing
+        timing.catalog = 0.25
+        let f = try Fixture(timing: timing)
+        defer { f.close() }
+        try await f.start()
+        for index in 0..<40 {
+            f.watcher.emit(ActivityFileChanges(catalog: true))
+            if index == 1 { try f.append("task_started"); f.emit() }
+            try await Task.sleep(for: .milliseconds(10))
+            if index == 12 { #expect(f.values.last?.isWorking == true) }
+        }
+        #expect(try f.reads(operation: "databaseQuery").count <= 3)
+        try f.append("task_complete"); f.emit()
+        try await wait { f.values.last?.isWorking == false }
+    }
+
+    @Test("large append preserves lifecycle and ignores an expected tail fragment")
+    func largeRecordTail() async throws {
+        let f = try Fixture()
+        defer { f.close() }
+        try await f.start()
+        try f.append("task_started"); f.emit()
+        try await wait { f.values.last?.isWorking == true }
+        var data = Data("{\"type\":\"response_item\",\"text\":\"".utf8)
+        data.append(Data(repeating: 97, count: 9 * 1024 * 1024))
+        data.append(Data("\"}\n".utf8))
+        data.append(Fixture.event("token_count"))
+        try f.appendData(data); f.emit()
+        let count = try f.reads().count
+        try await wait { (try? f.reads().count) ?? 0 > count }
+        #expect(f.values.last?.isWorking == true)
+        #expect(try f.reads().last?["parseFailures"] as? Int == 0)
+        try f.append("task_complete"); f.emit()
+        try await wait { f.values.last?.isWorking == false }
+    }
+
     @Test("database failure is unavailable and recovers on the next database event")
     func databaseFailure() async throws {
         let f = try Fixture()
