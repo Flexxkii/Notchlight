@@ -24,8 +24,8 @@ or simply give your notch a border in a color you like.
   hover details, and notch menu.
 - **Usage windows:** choose **5-hour**, **Weekly**, or **Automatic**, which
   prefers the five-hour window, then weekly, then another available limit.
-- **Automatic and manual refresh:** usage refreshes about once per minute,
-  with a Refresh button in Settings. Failed refreshes preserve the last known
+- **Automatic and manual refresh:** usage refreshes about once per minute while
+  working, and every five minutes during healthy idle, with a Refresh button in Settings. Failed refreshes preserve the last known
   value and show a warning; missing usage is labeled unavailable.
 - **Activity indicator:** local Codex activity switches the border to your
   chosen working color and adds a gently pulsing glow. The glow stops when
@@ -98,13 +98,13 @@ CLI and existing sign-in; it does not include a subscription or extra usage.
 ## Download and install
 
 1. Open [Releases](https://github.com/Flexxkii/notchlight/releases).
-2. Download `Notchlight-1.1.1-macOS-arm64.zip`, then unzip it.
+2. Download `Notchlight-1.2.0-macOS-arm64.zip`, then unzip it.
 3. Move `Notchlight.app` to Applications and open it.
 4. Adjust the border, or enable **Connect to Codex** if Codex is installed and
    signed in on your Mac.
 
 **Current release:** the downloadable build is for **Apple Silicon** and is
-**ad-hoc signed, not Developer ID signed or notarized**. macOS may block the
+**Apple Development signed, not Developer ID signed or notarized**. macOS may block the
 first launch. If you trust the download, try opening it, then use **System
 Settings → Privacy & Security → Open Anyway**, following
 [Apple's instructions](https://support.apple.com/en-us/102445). Managed Macs
@@ -121,7 +121,7 @@ The repository and its releases are public.
 | --- | --- |
 | Operating system | macOS 14 or later |
 | Visible notch border | A supported notched MacBook display |
-| Published 1.1.1 build | Apple Silicon (`arm64`) |
+| Published 1.2.0 build | Apple Silicon (`arm64`) |
 | Optional Codex features | Installed Codex CLI/desktop app and an existing compatible sign-in |
 | Building from source | Full Xcode 26+ with Swift 6.2+ and Icon Composer asset compilation |
 
@@ -129,7 +129,8 @@ The minimum deployment target is macOS 14, but this release was built and checke
 on macOS 27 with Xcode 27. Runtime behavior on macOS 14 and 26 has not been
 verified. Intel builds are not included or tested.
 
-Account usage normally refreshes once per minute. Local activity follows file
+Account usage refreshes about once per minute while working or recovering from
+an error, and every five minutes during healthy idle. Local activity follows file
 changes, with a safety check about once per minute and a two-second polling
 fallback if file watching is unavailable. Missing usage is shown as unavailable, not 0%.
 Local Codex formats can change, and remote-only activity may not be detected.
@@ -177,6 +178,29 @@ app. Notarization and ticket stapling are separate distribution steps.
 The editable shipping icon is `Resources/Notchlight.icon`. Open it in Icon
 Composer, make your changes, and rebuild. Root legal documents are canonical;
 run `./scripts/sync-legal.sh` after editing them to refresh the SwiftPM copies.
+
+## Desktop widgets
+
+Version 1.2.0 includes native small and medium WidgetKit widgets. Both show
+**Remaining**, independently of the app's Used/Remaining preference. The medium
+widget centers one ring when the account has only one allowance. See
+[widget implementation and validation](docs/widgets.md) for data semantics,
+freshness, installation checks, and current limitations.
+
+Live shared data requires a team-backed Apple signing identity for both the host
+and extension:
+
+```sh
+NOTCHLIGHT_SIGNING_IDENTITY="Your Apple Development or Developer ID identity" ./scripts/build-app.sh
+```
+
+The script derives the app group from the identity's actual team and signs the
+embedded sandboxed extension before the host. The existing ad-hoc build remains
+available for development, but it cannot authorize widget shared-container
+access. No signing certificate, team ID, credentials, or profile is committed.
+Launching the packaged app once is required before its widgets can appear in
+the macOS gallery. Open **Edit Widgets**, search for **Notchlight Usage**, and
+choose a small or medium widget. The 1.2.0 download includes the signed host and extension.
 
 ## Screenshots
 

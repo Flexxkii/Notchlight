@@ -10,10 +10,10 @@ validation_sources=("$validation_app_sources"/**/*.swift)
 validation_sources=(${validation_sources:#*/NotchlightApp.swift})
 if [[ -d "$validation_products/Modules" ]]; then
     validation_modules="$validation_products/Modules"
-    validation_objects=("$validation_products"/{BorderOverlay,CodexIntegration,Diagnostics}.build/*.o)
+    validation_objects=("$validation_products"/{BorderOverlay,CodexIntegration,Diagnostics,WidgetShared}.build/*.o)
 else
     validation_modules="$validation_products"
-    validation_objects=("$validation_products"/{BorderOverlay,CodexIntegration,Diagnostics}.o)
+    validation_objects=("$validation_products"/{BorderOverlay,CodexIntegration,Diagnostics,WidgetShared}.o)
 fi
 mkdir -p "${validation_output:h}"
 swiftc -O -g -parse-as-library -swift-version 6 -target "$(uname -m)-apple-macos14.0" \

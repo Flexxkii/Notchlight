@@ -41,6 +41,20 @@ struct PreviewOutlineTests {
         #expect(view.strokeLayer.animation(forKey: PreviewOutlineView.pulseKey) == nil)
     }
 
+    @Test("zero-size initial layout clears paths and a real layout restores them")
+    func initialEmptyLayout() {
+        let view = PreviewOutlineView()
+        view.update(.init(color: .blue, lineWidth: 3, outset: 0, start: 0.2, end: 0.8,
+                          isEnabled: true, glow: true, shouldPulse: true))
+        #expect(view.strokeLayer.path == nil)
+        #expect(view.strokeLayer.shadowPath == nil)
+        #expect(view.strokeLayer.animation(forKey: PreviewOutlineView.pulseKey) == nil)
+        view.frame = CGRect(x: 0, y: 0, width: 156, height: 34)
+        view.layout()
+        #expect(view.strokeLayer.path != nil)
+        #expect(view.strokeLayer.shadowPath != nil)
+    }
+
     @Test("trimmed stroke and shadow track geometry, disabled glow, and empty ranges")
     func geometryAndVisibility() throws {
         let view = PreviewOutlineView()

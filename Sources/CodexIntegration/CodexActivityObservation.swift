@@ -3,7 +3,7 @@ import Diagnostics
 
 struct ActivityObservationTiming: Sendable {
     var batch: TimeInterval = 0.25
-    var catalog: TimeInterval = 1
+    var catalog: TimeInterval = 5
     var safety: TimeInterval = 60
     var fallback: TimeInterval = 2
     var retry: TimeInterval = 30
@@ -26,6 +26,7 @@ public final class CodexActivityObservation {
     private var observers: [NSObjectProtocol] = []
     private var continuation: AsyncStream<CodexActivitySnapshot>.Continuation?
     private var lastSnapshot: CodexActivitySnapshot?
+    private var includesFreshness = false
     private var generation = 0
     private var environmentRevision = 0
     private var watcherRevision = 0
@@ -63,8 +64,9 @@ public final class CodexActivityObservation {
     }
 
     /// Replaces any previous subscriber. Cancelling the consumer also stops observation.
-    public func snapshots() -> AsyncStream<CodexActivitySnapshot> {
+    public func snapshots(includeFreshness: Bool = false) -> AsyncStream<CodexActivitySnapshot> {
         stop()
+        includesFreshness = includeFreshness
         let current = generation
         let pair = AsyncStream<CodexActivitySnapshot>.makeStream(bufferingPolicy: .bufferingNewest(1))
         continuation = pair.continuation
@@ -263,7 +265,10 @@ public final class CodexActivityObservation {
                     self.scheduleMaintenance()
                 } else { self.pending.merge(update.changes) }
             }
-            if result.catalogNeeded { self.pending.catalog = true }
+            if result.catalogNeeded {
+                self.pending.catalog = true
+                self.lastCatalog = .distantPast
+            }
             self.updateCatalogRecovery(unavailable: result.catalogUnavailable)
             self.publish(result)
             self.scheduleBatch(after: self.pending.catalog && self.pending.paths.isEmpty
@@ -295,7 +300,7 @@ public final class CodexActivityObservation {
 
     private func publish(_ result: ActivityRefresh) {
         let value = result.snapshot
-        if lastSnapshot?.isWorking != value.isWorking || lastSnapshot?.isAvailable != value.isAvailable
+        if includesFreshness || lastSnapshot?.isWorking != value.isWorking || lastSnapshot?.isAvailable != value.isAvailable
             || lastSnapshot?.activeTaskCount != value.activeTaskCount || lastSnapshot?.detail != value.detail {
             lastSnapshot = value
             continuation?.yield(value)

@@ -3,6 +3,45 @@ import Testing
 @testable import CodexIntegration
 
 struct CodexUsageParserTests {
+    @Test("duration-only monthly-sized windows retain their actual duration")
+    func extendedDurationsAndMissingFields() throws {
+        for duration in [40_320, 41_760, 43_200, 44_640, 60] {
+            let snapshot = try CodexUsageParser.snapshot(from: ["rateLimits": ["primary": [
+                "usedPercent": 24, "windowDurationMins": duration, "resetsAt": 1_800_000_000
+            ]]], sampledAt: .now)
+            #expect(snapshot.windows.count == 1)
+            #expect(snapshot.value(for: .fiveHour) == nil)
+            #expect(snapshot.value(for: .monthly) == nil)
+            #expect(snapshot.windows[0].windowDurationMins == duration)
+            #expect(snapshot.windows[0].resetsAt == Date(timeIntervalSince1970: 1_800_000_000))
+            #expect(!snapshot.windows[0].isCalendarMonth)
+        }
+        for window: [String: Any] in [
+            ["windowDurationMins": 300], ["usedPercent": NSNull(), "windowDurationMins": 300],
+            ["usedPercent": true, "windowDurationMins": 300], ["usedPercent": 0],
+            ["usedPercent": "24", "windowDurationMins": 300], ["usedPercent": 2, "windowDurationMins": 0],
+            ["usedPercent": Double.infinity, "windowDurationMins": 300], ["usedPercent": 2, "windowDurationMins": -300]
+        ] {
+            #expect(try CodexUsageParser.snapshot(from: ["rateLimits": ["primary": window]], sampledAt: .now).windows.isEmpty)
+        }
+    }
+
+    @Test("missing and malformed resets do not invent a date or remove a real zero")
+    func resetTimestamps() throws {
+        for reset: Any in [NSNull(), true, "bad", Double.infinity] {
+            let snapshot = try CodexUsageParser.snapshot(from: ["rateLimits": ["primary": [
+                "usedPercent": 0, "windowDurationMins": 300, "resetsAt": reset
+            ]]], sampledAt: .now)
+            #expect(snapshot.windows.first?.usedPercent == 0)
+            #expect(snapshot.windows.first?.resetsAt == nil)
+        }
+        let snapshot = try CodexUsageParser.snapshot(from: ["rateLimits": ["primary": [
+            "usedPercent": 24, "windowDurationMins": 43_200, "resetsAt": "2027-01-15T08:00:00Z"
+        ]]], sampledAt: .now)
+        #expect(snapshot.windows.first?.resetsAt != nil)
+        #expect(snapshot.windows.first?.title == "30-day")
+    }
+
     @Test("codex weekly data is read from the primary bucket")
     func weeklyInPrimaryBucket() throws {
         let result: [String: Any] = [

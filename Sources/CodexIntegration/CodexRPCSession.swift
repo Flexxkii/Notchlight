@@ -3,6 +3,7 @@ import Darwin
 import Diagnostics
 
 final class CodexRPCSession: @unchecked Sendable {
+    private(set) var accountFingerprint: String?
     private static let timeout: TimeInterval = 15
     private let cancellation: CodexCancellationToken
     private let diagnostics: DiagnosticRecorder
@@ -58,17 +59,26 @@ final class CodexRPCSession: @unchecked Sendable {
                 "pid": .int(Int64(pid)), "startIdentity": startIdentity.map { .int(Int64(clamping: $0)) } ?? .string("unknown")
             ])
         }
-        let deadline = Date().addingTimeInterval(timeoutOverride ?? Self.timeout)
-        _ = try request(["method": "initialize", "params": ["clientInfo": ["name": "notchlight", "title": "Notchlight", "version": "1.1.1"], "capabilities": ["experimentalApi": false]]], operation: .rpcInitialize, process: process, input: input, collector: collector, deadline: deadline, launchID: launchID, pid: pid, expectedStartIdentity: startIdentity)
+        _ = try request(["method": "initialize", "params": ["clientInfo": ["name": "notchlight", "title": "Notchlight", "version": "1.2.0"], "capabilities": ["experimentalApi": false]]], operation: .rpcInitialize, process: process, input: input, collector: collector, launchID: launchID, pid: pid, expectedStartIdentity: startIdentity)
         try send(["method": "initialized", "params": [:]], input: input)
-        let account = try request(["method": "account/read", "params": ["refreshToken": false]], operation: .rpcAccount, process: process, input: input, collector: collector, deadline: deadline, launchID: launchID, pid: pid, expectedStartIdentity: startIdentity)
+        let account = try request(["method": "account/read", "params": ["refreshToken": false]], operation: .rpcAccount, process: process, input: input, collector: collector, launchID: launchID, pid: pid, expectedStartIdentity: startIdentity)
         guard let accountInfo = account["account"] as? [String: Any] else { throw CodexUsageError.signInRequired }
         guard accountInfo["type"] as? String == "chatgpt" else { throw CodexUsageError.incompatibleAccount }
-        let limits = try request(["method": "account/rateLimits/read", "params": [:]], operation: .rpcLimits, process: process, input: input, collector: collector, deadline: deadline, launchID: launchID, pid: pid, expectedStartIdentity: startIdentity)
+        accountFingerprint = CodexAccountIdentity.fingerprint(accountInfo)
+        let limitsRequest: [String: Any] = ["method": "account/rateLimits/read", "params": [:]]
+        let limits: [String: Any]
+        do {
+            limits = try request(limitsRequest, operation: .rpcLimits, process: process, input: input, collector: collector, launchID: launchID, pid: pid, expectedStartIdentity: startIdentity)
+        } catch CodexUsageError.timedOut {
+            // One bounded retry of this read-only request reuses the same helper.
+            // Each request gets its own budget; account latency cannot consume it.
+            limits = try request(limitsRequest, operation: .rpcLimits, process: process, input: input, collector: collector, launchID: launchID, pid: pid, expectedStartIdentity: startIdentity)
+        }
         return try CodexUsageParser.snapshot(from: limits, sampledAt: Date())
     }
 
-    private func request(_ record: [String: Any], operation: DiagnosticOperation, process: Process, input: Pipe, collector: CodexRPCLineCollector, deadline: Date, launchID: String, pid: Int32, expectedStartIdentity: UInt64?) throws -> [String: Any] {
+    private func request(_ record: [String: Any], operation: DiagnosticOperation, process: Process, input: Pipe, collector: CodexRPCLineCollector, launchID: String, pid: Int32, expectedStartIdentity: UInt64?) throws -> [String: Any] {
+        let deadline = ContinuousClock.now + .seconds(timeoutOverride ?? Self.timeout)
         let interval = diagnostics.beginInterval(operation)
         let initialBytes = collector.receivedBytes
         var outcome: DiagnosticOutcome = .failed
@@ -79,7 +89,7 @@ final class CodexRPCSession: @unchecked Sendable {
             let id = collector.nextID()
             var request = record; request["id"] = id
             try send(request, input: input)
-            while Date() < deadline {
+            while ContinuousClock.now < deadline {
                 if cancellation.isCancelled { throw CodexUsageError.cancelled }
                 if !process.isRunning { throw CodexUsageError.protocolFailure }
                 if collector.failed { throw CodexUsageError.protocolFailure }

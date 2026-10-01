@@ -36,6 +36,29 @@ struct CodexRPCSessionTests {
         try? FileManager.default.removeItem(at: recorder.status.directory)
     }
 
+    @Test("slow earlier requests do not consume the rate-limit request budget")
+    func independentRequestBudgets() throws {
+        let helper = try FakeCodexHelper(mode: .slowAccount)
+        defer { helper.remove() }
+        let result = try CodexRPCSession(cancellation: CodexCancellationToken(), executable: helper.url, timeout: 0.6).readSnapshot()
+        #expect(result.windows.first?.usedPercent == 12.5)
+    }
+
+    @Test("one dropped rate-limit response is retried on the existing helper")
+    func retriesLimitsOnSameHelper() throws {
+        let helper = try FakeCodexHelper(mode: .retryLimits)
+        defer { helper.remove() }
+        let recorder = try makeRecorder()
+        defer { recorder.shutdown(); try? FileManager.default.removeItem(at: recorder.status.directory) }
+        let result = try CodexRPCSession(cancellation: CodexCancellationToken(), diagnostics: recorder, executable: helper.url, timeout: 0.6).readSnapshot()
+        #expect(result.windows.first?.usedPercent == 12.5)
+        recorder.flush()
+        let records = try diagnosticRecords(in: recorder.status.directory)
+        #expect(records.filter { $0["event"] as? String == "helperLifecycle" && ($0["fields"] as? [String: Any])?["phase"] as? String == "launched" }.count == 1)
+        let ends = records.compactMap { $0["fields"] as? [String: Any] }.filter { $0["operation"] as? String == "rpcLimits" && $0["phase"] as? String == "end" }
+        #expect(ends.map { $0["outcome"] as? String } == ["timedOut", "success"])
+    }
+
     @Test("RPC session reports malformed helper output")
     func protocolFailure() throws {
         let helper = try FakeCodexHelper(mode: .malformed)
@@ -123,7 +146,7 @@ struct CodexRPCSessionTests {
 
 private struct FakeCodexHelper {
     static let sentinel = "SENTINEL_PRIVATE_PAYLOAD"
-    enum Mode { case success, malformed, timeout }
+    enum Mode { case success, malformed, timeout, slowAccount, retryLimits }
     let url: URL
 
     init(mode: Mode) throws {
@@ -136,6 +159,10 @@ private struct FakeCodexHelper {
             body = "#!/bin/sh\necho 'not-json'\n"
         case .timeout:
             body = "#!/bin/sh\nsleep 20\n"
+        case .slowAccount:
+            body = "#!/bin/sh\nwhile IFS= read line; do\ncase \"$line\" in\n*'\"method\":\"initialize\"'*) echo '{\"id\":1,\"result\":{}}' ;;\n*'\"method\":\"account/read\"'*) sleep 0.4; echo '{\"id\":2,\"result\":{\"account\":{\"type\":\"chatgpt\"}}}' ;;\n*'\"method\":\"account/rateLimits/read\"'*) sleep 0.4; echo '{\"id\":3,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":12.5,\"windowDurationMins\":300}}}}' ;;\nesac\ndone\n"
+        case .retryLimits:
+            body = "#!/bin/sh\nattempt=0\nwhile IFS= read line; do\ncase \"$line\" in\n*'\"method\":\"initialize\"'*) echo '{\"id\":1,\"result\":{}}' ;;\n*'\"method\":\"account/read\"'*) echo '{\"id\":2,\"result\":{\"account\":{\"type\":\"chatgpt\"}}}' ;;\n*'\"method\":\"account/rateLimits/read\"'*) attempt=$((attempt+1)); if [ \"$attempt\" -eq 2 ]; then echo '{\"id\":4,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":12.5,\"windowDurationMins\":300}}}}'; fi ;;\nesac\ndone\n"
         }
         try Data(body.utf8).write(to: url)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)

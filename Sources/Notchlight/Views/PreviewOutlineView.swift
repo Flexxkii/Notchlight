@@ -60,8 +60,10 @@ final class PreviewOutlineView: NSView {
         let start = min(1, max(0, style.start)), end = min(1, max(0, style.end))
         let visible = style.isEnabled && end > start && style.lineWidth > 0 && !bounds.isEmpty
         let pulse = visible && style.glow && style.shouldPulse && window != nil
-        let path = PreviewNotchShape(outset: style.outset).path(in: bounds)
-            .trimmedPath(from: start, to: max(start, end)).cgPath
+        // SwiftUI can attach this view before its first nonzero layout. Avoid
+        // trimming a degenerate path and submitting it to Core Animation.
+        let path: CGPath? = visible ? PreviewNotchShape(outset: style.outset).path(in: bounds)
+            .trimmedPath(from: start, to: end).cgPath : nil
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -74,8 +76,8 @@ final class PreviewOutlineView: NSView {
         strokeLayer.shadowColor = style.color.cgColor
         // The shadow follows the trimmed stroke, including its rounded endpoints.
         // Its geometry only changes with appearance or layout, never per frame.
-        strokeLayer.shadowPath = visible ? path.copy(strokingWithWidth: style.lineWidth,
-            lineCap: .round, lineJoin: .round, miterLimit: 10) : nil
+        strokeLayer.shadowPath = path?.copy(strokingWithWidth: style.lineWidth,
+            lineCap: .round, lineJoin: .round, miterLimit: 10)
         strokeLayer.shadowOpacity = style.glow && visible ? (pulse ? 0.25 : 0.85) : 0
         strokeLayer.shadowRadius = pulse ? 3 : 8
         CATransaction.commit()

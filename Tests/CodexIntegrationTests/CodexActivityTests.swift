@@ -88,6 +88,21 @@ struct CodexActivityTests {
         #expect(state.lifecycle == .unknown)
     }
 
+    @Test("discarded oversized partial records resume at the next line boundary")
+    func oversizedPartialRecord() {
+        var state = state(lifecycle: .active, age: 0)
+        let first = CodexActivityParser.consume(data: Data(repeating: 97, count: 70_000), state: &state, launchDate: nil)
+        #expect(first.parseFailures == 0)
+        #expect(state.pending.isEmpty)
+        #expect(state.discardingPartialLine)
+        let remainder = Data("record suffix\n".utf8) + event(type: "task_complete", at: now)
+        let second = CodexActivityParser.consume(data: remainder, state: &state, launchDate: nil)
+        #expect(second.parseFailures == 0)
+        #expect(second.parsedRecords == 1)
+        #expect(state.lifecycle == .idle)
+        #expect(!state.discardingPartialLine)
+    }
+
     @Test("multiple active session paths are counted")
     func multipleActiveTasks() {
         let states = [state(lifecycle: .active, age: 3), state(lifecycle: .active, age: 30)]
