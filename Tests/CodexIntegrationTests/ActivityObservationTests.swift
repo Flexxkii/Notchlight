@@ -263,6 +263,8 @@ struct ActivityObservationTests {
         try await wait { (try? f.reads(operation: "databaseQuery").last?["errorCategory"] as? String) == "walUnavailable" }
         #expect(f.values.last?.isWorking == true)
         #expect(f.values.last?.isAvailable == true)
+        #expect(try f.reads().last?["outcome"] as? String == "success")
+        #expect(try f.reads().last?["databaseAvailable"] as? Bool == false)
         try f.append("task_complete"); f.emit()
         try await wait { f.values.last?.isWorking == false }
         #expect(f.values.last?.isAvailable == true)
@@ -270,6 +272,7 @@ struct ActivityObservationTests {
         await f.desktop.set(Date())
         f.observation.environmentChanged(.desktopChanged)
         try await wait { f.values.last?.isAvailable == false }
+        #expect(try f.reads().last?["outcome"] as? String == "unavailable")
     }
 
     @Test("catalog churn is coalesced while existing session events remain prompt")

@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.2.1](https://github.com/Flexxkii/notchlight/releases/tag/v1.2.1) — 2026-10-08
+
+- Reduced repeated display and appearance metadata in diagnostic samples.
+  Resource measurements and activity state still record every two seconds;
+  full context records on change and is checkpointed every minute.
+- Corrected activity diagnostics during temporary missing-WAL gaps: successful
+  cached session reads report success, with database availability recorded
+  separately. Genuine activity unavailability remains explicit.
+
+[Release notes and download details](docs/releases/1.2.1.md)
+
 ## [1.1.1](https://github.com/Flexxkii/notchlight/releases/tag/v1.1.1) — 2026-09-27
 
 ### Fixed

@@ -142,7 +142,7 @@ internal enum DiagnosticReport {
                     contexts.append((item.monotonic, context))
                 }
                 if item.event == DiagnosticEventName.resourceSample.rawValue {
-                    let stateKeys = ["codex_connected", "codex_working", "settings_visible", "preview_pulse_active", "usage_available", "usage_stale", "border_enabled", "border_effective_enabled", "pulse_requested", "reduceMotion", "swipe.phase", "swipe.status", "menu", "visible", "mixedState"]
+                    let stateKeys = DiagnosticSampleContext.keys.union(["mixedState"])
                     for key in stateKeys where item.fields[key] != nil { context[key] = DiagnosticReport.valueString(item.fields[key]!) }
                     contexts.append((item.monotonic, context))
                     samples.append(item)

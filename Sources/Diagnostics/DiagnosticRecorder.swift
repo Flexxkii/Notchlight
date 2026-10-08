@@ -49,6 +49,7 @@ public final class DiagnosticRecorder: @unchecked Sendable {
     private var sampleTimer: DispatchSourceTimer?
     private var flushTimer: DispatchSourceTimer?
     private var previous: SampleBaseline?
+    private var lastContextCheckpoint: UInt64?
     private var counterStart: UInt64 = 0
     private var file: FileHandle?
     private var fileURL: URL?
@@ -123,6 +124,7 @@ public final class DiagnosticRecorder: @unchecked Sendable {
             }
             guard change else { return }
             previous = nil
+            lastContextCheckpoint = nil
             if value {
                 writerFailed = false
                 fileIndex = 0
@@ -305,10 +307,21 @@ public final class DiagnosticRecorder: @unchecked Sendable {
     private func sample() {
         guard isEnabled else { return }
         let tick = monotonicClock(), date = wallClock()
-        let state = lock.withLock { (context, revision) }
+        let checkpointDue = lastContextCheckpoint.map { tick < $0 || tick - $0 >= 60_000_000_000 } ?? true
+        let state = lock.withLock {
+            var drain = false
+            if checkpointDue, !context.isEmpty {
+                var fields = context
+                fields["contextRevision"] = .int(Int64(clamping: revision))
+                drain = appendLocked(.context, fields: fields, tick: tick, date: date)
+            }
+            return (context, revision, drain)
+        }
+        if checkpointDue { lastContextCheckpoint = tick }
+        scheduleDrain(if: state.2)
         do {
             let snapshot = try sampler()
-            var fields = state.0
+            var fields = state.0.filter { DiagnosticSampleContext.keys.contains($0.key) }
             fields.merge([
                 "processStartIdentity": .int(Int64(clamping: snapshot.processStartIdentity)),
                 "userTimeNanoseconds": .int(Int64(clamping: snapshot.userTimeNanoseconds)),
