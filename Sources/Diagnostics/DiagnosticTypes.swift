@@ -39,6 +39,20 @@ public enum DiagnosticEventName: String, Sendable, Codable {
     case counters
 }
 
+/// Keep each measurement self-contained for state attribution after retention
+/// removes older files. Display geometry and appearance settings are recorded
+/// on change and in periodic full-context checkpoints instead of every sample.
+internal enum DiagnosticSampleContext {
+    static let keys: Set<String> = [
+        "codex_connected", "codex_monitoring", "codex_working", "codex_activity_available",
+        "active_task_count", "activity_watcher", "usage_available", "usage_stale", "usage_refreshing",
+        "settings_visible", "settings_occluded", "settings_minimized", "preview_present", "preview_pulse_active",
+        "border_enabled", "border_effective_enabled", "pulse_requested", "pulse.animationActive", "reduceMotion",
+        "swipe.phase", "swipe.status", "swipe.transitionPhase", "menu", "hovered", "visible", "panel.visible",
+        "hiddenReason", "system_sleeping", "diagnostics_exporting"
+    ]
+}
+
 public enum DiagnosticOperation: String, Sendable, Codable {
     case activityRead
     case databaseDiscovery

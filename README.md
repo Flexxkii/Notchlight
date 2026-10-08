@@ -98,7 +98,7 @@ CLI and existing sign-in; it does not include a subscription or extra usage.
 ## Download and install
 
 1. Open [Releases](https://github.com/Flexxkii/notchlight/releases).
-2. Download `Notchlight-1.2.0-macOS-arm64.zip`, then unzip it.
+2. Download `Notchlight-1.2.1-macOS-arm64.zip`, then unzip it.
 3. Move `Notchlight.app` to Applications and open it.
 4. Adjust the border, or enable **Connect to Codex** if Codex is installed and
    signed in on your Mac.
@@ -121,7 +121,7 @@ The repository and its releases are public.
 | --- | --- |
 | Operating system | macOS 14 or later |
 | Visible notch border | A supported notched MacBook display |
-| Published 1.2.0 build | Apple Silicon (`arm64`) |
+| Published 1.2.1 build | Apple Silicon (`arm64`) |
 | Optional Codex features | Installed Codex CLI/desktop app and an existing compatible sign-in |
 | Building from source | Full Xcode 26+ with Swift 6.2+ and Icon Composer asset compilation |
 
@@ -200,7 +200,7 @@ available for development, but it cannot authorize widget shared-container
 access. No signing certificate, team ID, credentials, or profile is committed.
 Launching the packaged app once is required before its widgets can appear in
 the macOS gallery. Open **Edit Widgets**, search for **Notchlight Usage**, and
-choose a small or medium widget. The 1.2.0 download includes the signed host and extension.
+choose a small or medium widget. The 1.2.1 download includes the signed host and extension.
 
 ## Screenshots
 

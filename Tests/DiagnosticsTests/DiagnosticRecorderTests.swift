@@ -335,6 +335,60 @@ struct DiagnosticRecorderTests {
         recorder.shutdown()
     }
 
+    @Test("compact samples preserve state and metrics while checkpointing full context")
+    func compactSamplesAndCheckpoints() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("diagnostics-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let box = Box()
+        let recorder = DiagnosticRecorder(testDirectory: directory, sampler: {
+            ProcessResourceSnapshot(processStartNanoseconds: 1, userTimeNanoseconds: box.tick,
+                                    systemTimeNanoseconds: 0, physicalFootprintBytes: 10,
+                                    residentBytes: 20, diskReadBytes: 3, diskWriteBytes: 4,
+                                    pageins: 5, packageIdleWakeups: 6, interruptWakeups: 7)
+        }, wallClock: { box.wall }, monotonicClock: { box.mono })
+        defer { recorder.shutdown() }
+        recorder.updateContext([
+            "codex_working": .bool(true), "settings_visible": .bool(false),
+            "settings_occluded": .bool(true), "active_task_count": .int(1),
+            "display.0.width": .int(1512), "line_width_points": .double(3)
+        ])
+        for _ in 0..<31 {
+            box.tick += 20_000_000; box.mono += 2_000_000_000
+            box.wall = box.wall.addingTimeInterval(2)
+            recorder.sampleNowForTesting()
+        }
+        recorder.flush()
+        let recorded = try records(in: directory)
+        let samples = recorded.filter { $0["event"] as? String == "resourceSample" }
+        let fields = try #require(samples.last?["fields"] as? [String: Any])
+        #expect(fields["codex_working"] as? Bool == true)
+        #expect(fields["settings_visible"] as? Bool == false)
+        #expect(fields["settings_occluded"] as? Bool == true)
+        #expect(fields["active_task_count"] as? Int == 1)
+        #expect(fields["cpuDeltaNanoseconds"] as? Int == 20_000_000)
+        #expect(fields["elapsedNanoseconds"] as? Int == 2_000_000_000)
+        #expect(fields["cpuPercent"] as? Double == 1)
+        #expect(fields["physicalFootprintBytes"] as? Int == 10)
+        #expect(fields["display.0.width"] == nil)
+        #expect(fields["line_width_points"] == nil)
+        let contexts = recorded.filter { $0["event"] as? String == "context" }
+        // One delta immediately, then one full checkpoint at 60 seconds.
+        #expect(contexts.count == 2)
+        let checkpoint = try #require(contexts.last?["fields"] as? [String: Any])
+        #expect(checkpoint["display.0.width"] as? Int == 1512)
+        #expect(checkpoint["line_width_points"] as? Double == 3)
+        #expect(checkpoint["codex_working"] as? Bool == true)
+        // Retained samples still attribute CPU correctly after earlier context
+        // events have been pruned, and the next checkpoint restores settings.
+        let retained = directory.appendingPathComponent("retained.jsonl")
+        let data = try samples.suffix(2).map { try JSONSerialization.data(withJSONObject: $0) + Data([10]) }
+            .reduce(into: Data()) { $0.append($1) }
+        try data.write(to: retained)
+        let report = try DiagnosticReport.render(logURLs: [retained])
+        #expect(report.contains("Weighted average app CPU: 1.00%"))
+        #expect(report.contains("codex_working=true"))
+    }
+
     private func logURL(in directory: URL) throws -> URL {
         try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .first(where: { $0.pathExtension == "jsonl" }).unwrap(or: CocoaError(.fileNoSuchFile))

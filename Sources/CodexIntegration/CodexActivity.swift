@@ -99,7 +99,8 @@ public actor CodexActivityReader {
                 "bytesRead": .int(Int64(sampledBytesRead)),
                 "parsedRecords": .int(Int64(sampledParsedRecords)),
                 "unreadableFiles": .int(Int64(sampledUnreadableFiles)),
-                "parseFailures": .int(Int64(sampledParseFailures))
+                "parseFailures": .int(Int64(sampledParseFailures)),
+                "databaseAvailable": .bool(catalogAvailable)
             ])
         }
         if Task.isCancelled { outcome = .cancelled; return ActivityRefresh(snapshot: unavailable(at: now)) }
@@ -140,11 +141,11 @@ public actor CodexActivityReader {
                 selected.formUnion(recoveringCatalog ? allowed : allowed.subtracting(filesByPath.keys))
             } else {
                 catalogAvailable = false
-                outcome = .unavailable
                 // A writer can briefly remove its WAL during a checkpoint. Keep
                 // reading known session files during that gap; restart, schema
                 // failures and a missing initial catalog still fail closed.
                 guard catalogWaitingForWAL, !rolloutPaths.isEmpty else {
+                    outcome = .unavailable
                     sourceAvailable = false
                     return ActivityRefresh(snapshot: unavailable(at: now), catalogUnavailable: true)
                 }
@@ -185,6 +186,7 @@ public actor CodexActivityReader {
         sourceAvailable = catalogAvailable || (catalogWaitingForWAL && !rolloutPaths.isEmpty)
         if !sourceAvailable { outcome = .unavailable }
         let result = reclassify(now: now)
+        outcome = result.snapshot.isAvailable ? .success : .unavailable
         return ActivityRefresh(snapshot: result.snapshot, nextExpiry: result.nextExpiry,
             catalogNeeded: unknownPath && !needsCatalog,
             catalogUnavailable: !catalogAvailable,
