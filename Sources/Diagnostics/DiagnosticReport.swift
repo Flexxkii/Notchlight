@@ -6,9 +6,11 @@ import Foundation
 internal enum DiagnosticReport {
     static func render(logURLs: [URL]) throws -> String {
         let input = try read(logURLs: logURLs)
-        let sessions = Dictionary(grouping: input.events, by: { $0.session })
-            .map { Session(id: $0.key, events: $0.value) }
-            .sorted { $0.id < $1.id }
+        let reader = RecordReader(urls: input.urls)
+        defer { reader.close() }
+        let sessions = try input.records.keys.sorted().map { id in
+            try Session(id: id, records: input.records[id] ?? [], reader: reader)
+        }
 
         var report = "# Notchlight diagnostics\n\n"
         report += "Sessions: \(sessions.count)\n\n"
@@ -38,29 +40,61 @@ internal enum DiagnosticReport {
     }
 
     private static func read(logURLs: [URL]) throws -> Input {
-        var events: [Event] = []
+        let urls = logURLs.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var records: [String: [RecordLocation]] = [:]
         var corrupt = 0
         var corruptLast = 0
-        for url in logURLs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            let data = try Data(contentsOf: url)
-            let lines = data.split(separator: 10, omittingEmptySubsequences: true)
-            for (index, line) in lines.enumerated() {
-                guard let lineText = String(data: Data(line), encoding: .utf8),
-                      let lineData = lineText.data(using: .utf8),
-                      let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                      let session = object["sessionUUID"] as? String,
-                      let event = object["event"] as? String else {
-                    corrupt += 1
-                    if index == lines.index(before: lines.endIndex) { corruptLast += 1 }
-                    continue
+        var order = 0
+        for (fileIndex, url) in urls.enumerated() {
+            var lastWasCorrupt = false
+            try scanLines(in: url) { data, offset in
+                autoreleasepool {
+                    guard let event = decode(data) else {
+                        corrupt += 1
+                        lastWasCorrupt = true
+                        return
+                    }
+                    lastWasCorrupt = false
+                    records[event.session, default: []].append(RecordLocation(
+                        fileIndex: fileIndex, offset: offset, length: data.count,
+                        sequence: event.sequence, monotonic: event.monotonic, order: order))
+                    order += 1
                 }
-                let sequence = number(object["sequence"]).map { UInt64(max(0, $0)) } ?? 0
-                let mono = number(object["monotonicNanoseconds"]).map { UInt64(max(0, $0)) } ?? 0
-                let fields = object["fields"] as? [String: Any] ?? [:]
-                events.append(Event(session: session, sequence: sequence, monotonic: mono, event: event, fields: fields))
+            }
+            if lastWasCorrupt { corruptLast += 1 }
+        }
+        return Input(urls: urls, records: records, corruptLines: corrupt, corruptLastLines: corruptLast)
+    }
+
+    /// Keep only byte locations while sorting. Copied export logs remain immutable
+    /// across both passes; decoded Foundation objects are released after each line.
+    private static func scanLines(in url: URL, consume: (Data, UInt64) -> Void) throws {
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        var buffer = Data()
+        var offset: UInt64 = 0
+        while let chunk = try file.read(upToCount: 64 * 1024), !chunk.isEmpty {
+            buffer.append(chunk)
+            while let newline = buffer.firstIndex(of: 10) {
+                let length = buffer.distance(from: buffer.startIndex, to: newline)
+                if length > 0 { consume(Data(buffer.prefix(length)), offset) }
+                buffer.removeSubrange(...newline)
+                offset += UInt64(length + 1)
             }
         }
-        return Input(events: events, corruptLines: corrupt, corruptLastLines: corruptLast)
+        if !buffer.isEmpty { consume(buffer, offset) }
+    }
+
+    private static func decode(_ data: Data) -> Event? {
+        guard let text = String(data: data, encoding: .utf8),
+              let utf8 = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: utf8) as? [String: Any],
+              let session = object["sessionUUID"] as? String,
+              let event = object["event"] as? String else { return nil }
+        return Event(session: session,
+            sequence: number(object["sequence"]).map { UInt64(max(0, $0)) } ?? 0,
+            monotonic: number(object["monotonicNanoseconds"]).map { UInt64(max(0, $0)) } ?? 0,
+            event: event, fields: object["fields"] as? [String: Any] ?? [:])
     }
 
     private static func number(_ value: Any?) -> Double? {
@@ -73,7 +107,8 @@ internal enum DiagnosticReport {
     }
 
     private struct Input {
-        let events: [Event]
+        let urls: [URL]
+        let records: [String: [RecordLocation]]
         let corruptLines: Int
         let corruptLastLines: Int
     }
@@ -86,164 +121,186 @@ internal enum DiagnosticReport {
         let fields: [String: Any]
     }
 
-    private struct StateSample {
-        let at: UInt64
-        let fields: [String: Any]
-        let context: [String: String]
-        let valid: Bool
+    private struct RecordLocation {
+        let fileIndex: Int
+        let offset: UInt64
+        let length: Int
+        let sequence: UInt64
+        let monotonic: UInt64
+        let order: Int
+    }
+
+    /// One open file and one read window bound I/O buffers even for many sessions.
+    private final class RecordReader {
+        let urls: [URL]
+        var file: FileHandle?
+        var fileIndex: Int?
+        var buffer = Data()
+        var offset: UInt64 = 0
+
+        init(urls: [URL]) { self.urls = urls }
+
+        func close() { try? file?.close(); file = nil }
+
+        func event(at record: RecordLocation) throws -> Event {
+            if fileIndex != record.fileIndex {
+                close()
+                file = try FileHandle(forReadingFrom: urls[record.fileIndex])
+                fileIndex = record.fileIndex
+                buffer = Data()
+            }
+            guard let file else { throw CocoaError(.fileReadUnknown) }
+            if record.offset < offset || record.offset + UInt64(record.length) > offset + UInt64(buffer.count) {
+                try file.seek(toOffset: record.offset)
+                buffer = try file.read(upToCount: max(64 * 1024, record.length)) ?? Data()
+                offset = record.offset
+            }
+            let start = Int(record.offset - offset)
+            guard start + record.length <= buffer.count,
+                  let event = decode(buffer.subdata(in: start..<(start + record.length))) else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            return event
+        }
+    }
+
+    private struct StateTotals {
+        var samples = 0
+        var cpu: UInt64 = 0
+        var elapsed: UInt64 = 0
+        var peakMemory: UInt64 = 0
+    }
+
+    private struct ResourceTotals {
+        var samples = 0
+        var cpuWeighted = 0.0
+        var wall: UInt64 = 0
+        var firstMemory: UInt64?
+        var lastMemory: UInt64?
+        var peakMemory: UInt64?
+        var peakCPU: Double?
+        var diskReadDelta: UInt64 = 0
+        var diskWriteDelta: UInt64 = 0
+        var wakeupDelta: UInt64 = 0
+        var interruptDelta: UInt64 = 0
+        var pageinDelta: UInt64 = 0
+
+        mutating func consume(_ fields: [String: Any]) {
+            samples += 1
+            if let cpu = u64(fields["cpuDeltaNanoseconds"]), let elapsed = u64(fields["elapsedNanoseconds"]), elapsed > 0 {
+                cpuWeighted += Double(cpu) * 100; wall += elapsed
+            } else if fields["baseline"] == nil, let cpu = number(fields["cpuPercent"]) {
+                let elapsed = u64(fields["elapsedNanoseconds"]) ?? 0
+                cpuWeighted += cpu * Double(elapsed); wall += elapsed
+            }
+            if let value = u64(fields["physicalFootprintBytes"]) {
+                firstMemory = firstMemory ?? value; lastMemory = value
+                peakMemory = max(peakMemory ?? value, value)
+            }
+            if let value = number(fields["cpuPercent"]) { peakCPU = max(peakCPU ?? value, value) }
+            diskReadDelta += u64(fields["diskReadDeltaBytes"]) ?? 0
+            diskWriteDelta += u64(fields["diskWriteDeltaBytes"]) ?? 0
+            wakeupDelta += u64(fields["packageIdleWakeupDelta"]) ?? 0
+            interruptDelta += u64(fields["interruptWakeupDelta"]) ?? 0
+            pageinDelta += u64(fields["pageinDelta"]) ?? 0
+        }
     }
 
     private struct Session {
         let id: String
-        let events: [Event]
-        let sorted: [Event]
-        let sequenceGaps: Int
-        let droppedEvents: Int
-        let incompleteIntervals: Int
-        let danglingBegins: Int
-        let orphanEnds: Int
-        let sampleGaps: Int
-        let sampleUnavailable: Int
-        let baselineResets: Int
-        let samples: [Event]
-        let stateSamples: [StateSample]
-        let contexts: [(at: UInt64, values: [String: String])]
-        let operations: [Operation]
-        let helpers: [String: Helper]
-        let counters: [String: (duration: UInt64, count: Int64)]
+        var sequenceGaps = 0
+        var droppedEvents = 0
+        var incompleteIntervals = 0
+        var danglingBegins = 0
+        var orphanEnds = 0
+        var sampleGaps = 0
+        var sampleUnavailable = 0
+        var baselineResets = 0
+        var resources = ResourceTotals()
+        var stateGroups: [String: StateTotals] = [:]
+        var mixedSamples = 0
+        var operations: [String: Operation] = [:]
+        var helpers: [String: Helper] = [:]
+        var counters: [String: (duration: UInt64, count: Int64)] = [:]
+        private static let stateKeys = ["codex_connected", "codex_working", "settings_visible", "preview_pulse_active", "visible", "reduceMotion"]
 
-        init(id: String, events: [Event]) {
+        init(id: String, records: [RecordLocation], reader: RecordReader) throws {
             self.id = id
-            self.events = events
-            sorted = events.sorted { lhs, rhs in
+            let sorted = records.sorted { lhs, rhs in
                 if lhs.sequence != rhs.sequence { return lhs.sequence < rhs.sequence }
-                return lhs.monotonic < rhs.monotonic
+                if lhs.monotonic != rhs.monotonic { return lhs.monotonic < rhs.monotonic }
+                return lhs.order < rhs.order
             }
-            var gaps = 0
             var prior: UInt64?
             var context: [String: String] = [:]
-            var contexts: [(UInt64, [String: String])] = []
-            var samples: [Event] = []
-            var stateSamples: [StateSample] = []
             var begins: [String: (String, UInt64)] = [:]
-            var operations: [Operation] = []
-            var helpers: [String: Helper] = [:]
-            var counters: [String: (UInt64, Int64)] = [:]
-            var dropped = 0
-            var orphanEnds = 0
-            var sampleGaps = 0
-            var sampleUnavailable = 0
-            var baselineResets = 0
-            for item in sorted {
-                if let prior, item.sequence > prior + 1 { gaps += Int(min(UInt64(Int.max), item.sequence - prior - 1)) }
-                prior = max(prior ?? 0, item.sequence)
-                if item.event == DiagnosticEventName.context.rawValue {
-                    for (key, value) in item.fields { context[key] = DiagnosticReport.valueString(value) }
-                    contexts.append((item.monotonic, context))
-                }
-                if item.event == DiagnosticEventName.resourceSample.rawValue {
-                    let stateKeys = DiagnosticSampleContext.keys.union(["mixedState"])
-                    for key in stateKeys where item.fields[key] != nil { context[key] = DiagnosticReport.valueString(item.fields[key]!) }
-                    contexts.append((item.monotonic, context))
-                    samples.append(item)
-                    if item.fields["sampleGap"] as? Bool == true { sampleGaps += 1 }
-                    if item.fields["sampleAvailable"] as? Bool == false || item.fields["errorCategory"] != nil { sampleUnavailable += 1 }
-                    let valid = item.fields["mixedState"] as? Bool != true && item.fields["cpuDeltaNanoseconds"] != nil && item.fields["elapsedNanoseconds"] != nil && item.fields["baseline"] == nil
-                    stateSamples.append(StateSample(at: item.monotonic, fields: item.fields, context: context, valid: valid))
-                }
-                if item.event == DiagnosticEventName.lifecycle.rawValue, item.fields["phase"] as? String == "baselineReset" { baselineResets += 1 }
-                if item.event == DiagnosticEventName.failure.rawValue {
-                    dropped += Int(max(0, DiagnosticReport.number(item.fields["droppedCount"]) ?? 0))
-                }
-                if item.event == DiagnosticEventName.operation.rawValue { Self.consumeOperation(item, begins: &begins, output: &operations, orphanEnds: &orphanEnds) }
-                if item.event == DiagnosticEventName.helperLifecycle.rawValue || item.event == DiagnosticEventName.helperSample.rawValue {
-                    Self.consumeHelper(item, into: &helpers)
-                }
-                if item.event == DiagnosticEventName.counters.rawValue {
-                    for (key, value) in item.fields where key.hasSuffix(".count") || key.hasSuffix(".durationNanoseconds") {
-                        let current = counters[key] ?? (0, 0)
-                        if key.hasSuffix(".count") { counters[key] = (current.0, current.1 + Int64(DiagnosticReport.number(value) ?? 0)) }
-                        else { counters[key] = (current.0 + UInt64(max(0, DiagnosticReport.number(value) ?? 0)), current.1) }
+            for record in sorted {
+                try autoreleasepool {
+                    let item = try reader.event(at: record)
+                    if let prior, item.sequence > prior + 1 { sequenceGaps += Int(min(UInt64(Int.max), item.sequence - prior - 1)) }
+                    prior = max(prior ?? 0, item.sequence)
+                    if item.event == DiagnosticEventName.context.rawValue {
+                        for key in Self.stateKeys where item.fields[key] != nil { context[key] = DiagnosticReport.valueString(item.fields[key]!) }
+                    }
+                    if item.event == DiagnosticEventName.resourceSample.rawValue {
+                        for key in Self.stateKeys where item.fields[key] != nil { context[key] = DiagnosticReport.valueString(item.fields[key]!) }
+                        resources.consume(item.fields)
+                        if item.fields["sampleGap"] as? Bool == true { sampleGaps += 1 }
+                        if item.fields["sampleAvailable"] as? Bool == false || item.fields["errorCategory"] != nil { sampleUnavailable += 1 }
+                        let valid = item.fields["mixedState"] as? Bool != true && item.fields["cpuDeltaNanoseconds"] != nil && item.fields["elapsedNanoseconds"] != nil && item.fields["baseline"] == nil
+                        if item.fields["mixedState"] as? Bool == true { mixedSamples += 1 }
+                        if valid {
+                            let combo = Self.stateKeys.map { "\($0)=\(context[$0] ?? "unknown")" }.joined(separator: ",")
+                            stateGroups[combo, default: StateTotals()].samples += 1
+                            stateGroups[combo, default: StateTotals()].cpu += u64(item.fields["cpuDeltaNanoseconds"]) ?? 0
+                            stateGroups[combo, default: StateTotals()].elapsed += u64(item.fields["elapsedNanoseconds"]) ?? 0
+                            stateGroups[combo, default: StateTotals()].peakMemory = max(stateGroups[combo]?.peakMemory ?? 0, u64(item.fields["physicalFootprintBytes"]) ?? 0)
+                        }
+                    }
+                    if item.event == DiagnosticEventName.lifecycle.rawValue, item.fields["phase"] as? String == "baselineReset" { baselineResets += 1 }
+                    if item.event == DiagnosticEventName.failure.rawValue {
+                        droppedEvents += Int(max(0, DiagnosticReport.number(item.fields["droppedCount"]) ?? 0))
+                    }
+                    if item.event == DiagnosticEventName.operation.rawValue { Self.consumeOperation(item, begins: &begins, output: &operations, orphanEnds: &orphanEnds) }
+                    if item.event == DiagnosticEventName.helperLifecycle.rawValue || item.event == DiagnosticEventName.helperSample.rawValue {
+                        Self.consumeHelper(item, into: &helpers)
+                    }
+                    if item.event == DiagnosticEventName.counters.rawValue {
+                        for (key, value) in item.fields where key.hasSuffix(".count") || key.hasSuffix(".durationNanoseconds") {
+                            let current = counters[key] ?? (0, 0)
+                            if key.hasSuffix(".count") { counters[key] = (current.0, current.1 + Int64(DiagnosticReport.number(value) ?? 0)) }
+                            else { counters[key] = (current.0 + UInt64(max(0, DiagnosticReport.number(value) ?? 0)), current.1) }
+                        }
                     }
                 }
             }
-            self.sequenceGaps = gaps
-            self.droppedEvents = dropped
-            self.samples = samples
-            self.stateSamples = stateSamples
-            self.contexts = contexts
-            self.operations = operations
-            self.helpers = helpers
-            self.counters = counters
             incompleteIntervals = begins.count + orphanEnds
             danglingBegins = begins.count
-            self.orphanEnds = orphanEnds
-            self.sampleGaps = sampleGaps
-            self.sampleUnavailable = sampleUnavailable
-            self.baselineResets = baselineResets
         }
 
         var resourceReport: String {
-            guard !samples.isEmpty else { return "### Resources\n\nNo resource samples recorded.\n\n" }
-            var cpuWeighted = 0.0, wall: UInt64 = 0
-            var memory: [UInt64] = [], diskReadDelta: UInt64 = 0, diskWriteDelta: UInt64 = 0, wakeupDelta: UInt64 = 0
-            var interruptDelta: UInt64 = 0, pageinDelta: UInt64 = 0
-            var firstMemory: UInt64?, lastMemory: UInt64?
-            for sample in samples {
-                if let cpu = u64(sample.fields["cpuDeltaNanoseconds"]), let elapsed = u64(sample.fields["elapsedNanoseconds"]), elapsed > 0 {
-                    cpuWeighted += Double(cpu) * 100; wall += elapsed
-                } else if sample.fields["baseline"] == nil, let cpu = number(sample.fields["cpuPercent"]) {
-                    let elapsed = u64(sample.fields["elapsedNanoseconds"]) ?? 0
-                    cpuWeighted += cpu * Double(elapsed); wall += elapsed
-                }
-                if let value = u64(sample.fields["physicalFootprintBytes"]) { memory.append(value); firstMemory = firstMemory ?? value; lastMemory = value }
-                diskReadDelta += u64(sample.fields["diskReadDeltaBytes"]) ?? 0
-                diskWriteDelta += u64(sample.fields["diskWriteDeltaBytes"]) ?? 0
-                wakeupDelta += u64(sample.fields["packageIdleWakeupDelta"]) ?? 0
-                interruptDelta += u64(sample.fields["interruptWakeupDelta"]) ?? 0
-                pageinDelta += u64(sample.fields["pageinDelta"]) ?? 0
-            }
-            let cpuText = wall > 0 ? String(format: "%.2f%%", cpuWeighted / Double(wall)) : "unavailable"
-            let growth = firstMemory.flatMap { first in lastMemory.map { last in signedBytes(last, from: first) } } ?? "unavailable"
-            let peakCPU = samples.compactMap { number($0.fields["cpuPercent"]) }.max().map { String(format: "%.2f%%", $0) } ?? "unavailable"
-            let peakMemory = memory.max().map(formatBytes) ?? "unavailable"
-            return "### Resources\n\n- Weighted average app CPU: \(cpuText)\n- Peak app CPU: \(peakCPU)\n- Physical footprint: \(peakMemory) peak; first-to-last growth \(growth)\n- Disk read delta: \(formatBytes(diskReadDelta))\n- Disk write delta: \(formatBytes(diskWriteDelta))\n- Package idle wakeup delta: \(wakeupDelta)\n- Interrupt wakeup delta: \(interruptDelta)\n- Page-in delta: \(pageinDelta)\n\n"
+            guard resources.samples > 0 else { return "### Resources\n\nNo resource samples recorded.\n\n" }
+            let cpuText = resources.wall > 0 ? String(format: "%.2f%%", resources.cpuWeighted / Double(resources.wall)) : "unavailable"
+            let growth = resources.firstMemory.flatMap { first in resources.lastMemory.map { last in signedBytes(last, from: first) } } ?? "unavailable"
+            let peakCPU = resources.peakCPU.map { String(format: "%.2f%%", $0) } ?? "unavailable"
+            let peakMemory = resources.peakMemory.map(formatBytes) ?? "unavailable"
+            return "### Resources\n\n- Weighted average app CPU: \(cpuText)\n- Peak app CPU: \(peakCPU)\n- Physical footprint: \(peakMemory) peak; first-to-last growth \(growth)\n- Disk read delta: \(formatBytes(resources.diskReadDelta))\n- Disk write delta: \(formatBytes(resources.diskWriteDelta))\n- Package idle wakeup delta: \(resources.wakeupDelta)\n- Interrupt wakeup delta: \(resources.interruptDelta)\n- Page-in delta: \(resources.pageinDelta)\n\n"
         }
 
         var stateReport: String {
-            let keys = ["codex_connected", "codex_working", "settings_visible", "preview_pulse_active", "visible", "reduceMotion"]
-            let valid = stateSamples.filter(\.valid)
-            guard !valid.isEmpty else { return "### Observed states\n\nNo valid state samples recorded.\n\n" }
-            var grouped: [String: (samples: Int, cpu: UInt64, elapsed: UInt64, peakMemory: UInt64)] = [:]
-            for sample in valid {
-                let combo = keys.map { "\($0)=\(sample.context[$0] ?? "unknown")" }.joined(separator: ",")
-                let current = grouped[combo] ?? (0, 0, 0, 0)
-                grouped[combo] = (current.samples + 1,
-                                  current.cpu + (u64(sample.fields["cpuDeltaNanoseconds"]) ?? 0),
-                                  current.elapsed + (u64(sample.fields["elapsedNanoseconds"]) ?? 0),
-                                  max(current.peakMemory, u64(sample.fields["physicalFootprintBytes"]) ?? 0))
-            }
+            guard !stateGroups.isEmpty else { return "### Observed states\n\nNo valid state samples recorded.\n\n" }
             var text = "### Observed states\n\n| State combination | Samples | Observed interval (s) | Weighted CPU | Peak memory |\n|---|---:|---:|---:|---:|\n"
-            for (combo, value) in grouped.sorted(by: { $0.key < $1.key }) {
+            for (combo, value) in stateGroups.sorted(by: { $0.key < $1.key }) {
                 let cpu = value.elapsed > 0 ? String(format: "%.2f%%", 100 * Double(value.cpu) / Double(value.elapsed)) : "unavailable"
                 text += "| \(combo) | \(value.samples) | \(String(format: "%.3f", Double(value.elapsed) / 1_000_000_000)) | \(cpu) | \(formatBytes(value.peakMemory)) |\n"
             }
-            let mixed = stateSamples.filter { $0.fields["mixedState"] as? Bool == true }.count
-            return text + "\nMixed samples excluded from state rows: \(mixed). CPU and resource metrics are not attributed exclusively to any state.\n\n"
+            return text + "\nMixed samples excluded from state rows: \(mixedSamples). CPU and resource metrics are not attributed exclusively to any state.\n\n"
         }
 
         var operationReport: String {
             var text = "### Operations\n\n"
             if operations.isEmpty { return text + "No complete operation intervals recorded.\n\n" }
-            var grouped: [String: Operation] = [:]
-            for op in operations {
-                let old = grouped[op.name]
-                grouped[op.name] = Operation(name: op.name,
-                                              durations: (old?.durations ?? []) + op.durations,
-                                              count: (old?.count ?? 0) + op.count,
-                                              failures: (old?.failures ?? 0) + op.failures)
-            }
-            for op in grouped.values.sorted(by: { $0.name < $1.name }) {
+            for op in operations.values.sorted(by: { $0.name < $1.name }) {
                 text += "- `\(safe(op.name))`: \(op.count) calls, \(op.failures) failed, average \(formatDuration(op.durations.reduce(0, +) / UInt64(max(1, op.count)))), p95 \(formatDuration(percentile(op.durations, 0.95))), max \(formatDuration(op.durations.max() ?? 0))\n"
             }
             return text + "\n"
@@ -275,7 +332,7 @@ internal enum DiagnosticReport {
             return text + "\n"
         }
 
-        private static func consumeOperation(_ item: Event, begins: inout [String: (String, UInt64)], output: inout [Operation], orphanEnds: inout Int) {
+        private static func consumeOperation(_ item: Event, begins: inout [String: (String, UInt64)], output: inout [String: Operation], orphanEnds: inout Int) {
             let name = item.fields["operation"] as? String ?? "unknown"
             let key = item.fields["intervalID"].map { "\(name)#\(DiagnosticReport.valueString($0))" } ?? name
             if item.fields["phase"] as? String == "begin" { begins[key] = (name, item.monotonic); return }
@@ -283,7 +340,9 @@ internal enum DiagnosticReport {
             if !begins.keys.contains(key) { orphanEnds += 1 }
             let duration = DiagnosticReport.u64(item.fields["durationNanoseconds"]) ?? begins.removeValue(forKey: key).map { item.monotonic &- $0.1 } ?? 0
             let failed = (item.fields["outcome"] as? String).map { $0 != "success" } ?? false
-            output.append(Operation(name: name, durations: [duration], count: 1, failures: failed ? 1 : 0))
+            output[name, default: Operation(name: name)].durations.append(duration)
+            output[name, default: Operation(name: name)].count += 1
+            if failed { output[name, default: Operation(name: name)].failures += 1 }
             begins.removeValue(forKey: key)
         }
         private static func consumeHelper(_ item: Event, into helpers: inout [String: Helper]) {
@@ -307,7 +366,7 @@ internal enum DiagnosticReport {
         private func safe(_ value: String) -> String { DiagnosticReport.safe(value) }
     }
 
-    private struct Operation { let name: String; let durations: [UInt64]; let count: Int; let failures: Int }
+    private struct Operation { let name: String; var durations: [UInt64] = []; var count = 0; var failures = 0 }
     private struct Helper { let id: String; var samples = 0; var maxCPUTime: UInt64 = 0; var hasCPUTime = false; var maxMemory: UInt64?; var partial = false }
     private static func u64(_ value: Any?) -> UInt64? { number(value).flatMap { $0 >= 0 ? UInt64($0) : nil } }
     private static func valueString(_ value: Any) -> String { if let s = value as? String { return s }; if let b = value as? Bool { return b ? "true" : "false" }; return String(describing: value) }
