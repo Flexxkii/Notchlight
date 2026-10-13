@@ -116,10 +116,23 @@ and has only its app-group entitlement. Signing alone does not notarize the app.
 A local Apple Development identity was used for this validation. Public release
 signing/notarization was not performed.
 
-The previous default ad-hoc build is retained. It builds and embeds the extension
-and explicitly warns that live app-group sharing requires a team identity; it
-does not fabricate a group identifier or claim ad-hoc widgets are fully functional.
-The packaged app is `build/Notchlight.app`. Launch it once, then use macOS's
+Packaged builds require the signing identity; missing or ad-hoc signing is rejected
+before touching the existing app. A new bundle is assembled in a staging directory.
+`scripts/verify-widget-package.py` checks actual code signatures, matching signing
+teams, the team-prefixed app group in both Info.plists and signed entitlements,
+the extension sandbox, and matching versions. Only a passing bundle replaces
+`build/Notchlight.app`; the prior app is preserved under `build/previous-app.*`.
+`scripts/package-release.sh` uses the same gate. Signing or validation failures
+leave the previous app in place. For development without an identity, use
+`swift run Notchlight`.
+
+Run the packaging regression tests with
+`python3 scripts/validation/test-widget-packaging.py`. An existing packaged app
+can be checked with `python3 scripts/verify-widget-package.py build/Notchlight.app`.
+The gate checks packaging configuration; live shared-container access and actual
+WidgetKit delivery still require runtime validation.
+
+Launch the packaged app once, then use macOS's
 **Edit Widgets** gallery to select Notchlight Usage and add either family.
 
 The URL `notchlight://usage` is registered by the host and set once with

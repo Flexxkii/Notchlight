@@ -20,4 +20,4 @@ ditto -c -k --sequesterRsrc --keepParent build/Notchlight.app "dist/$release_nam
 )
 print "Created: dist/$release_name"
 print "Created: dist/SHA256SUMS.txt"
-print "Notarization is a separate step. Do not describe an ad-hoc archive as notarized."
+print "Notarization is a separate step; a signed archive is not automatically notarized."

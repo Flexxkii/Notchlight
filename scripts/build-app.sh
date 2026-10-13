@@ -5,9 +5,7 @@ SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
 BUILD_DIR="${PROJECT_DIR}/build"
 APP_NAME="Notchlight.app"
-APP_DIR="${BUILD_DIR}/${APP_NAME}"
-CONTENTS_DIR="${APP_DIR}/Contents"
-RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+DESTINATION_APP="${BUILD_DIR}/${APP_NAME}"
 
 open_app=false
 if (( $# > 1 )); then
@@ -21,8 +19,23 @@ elif (( $# == 1 )); then
     open_app=true
 fi
 
+# Refuse before touching the existing app. An ad-hoc host cannot publish to
+# the widget's shared container, even when codesign verification succeeds.
+if [[ -z "${NOTCHLIGHT_SIGNING_IDENTITY:-}" || "${NOTCHLIGHT_SIGNING_IDENTITY:-}" == "-" ]]; then
+    print -u2 'Packaged widgets require NOTCHLIGHT_SIGNING_IDENTITY (Apple Development or Developer ID).'
+    print -u2 'Set it to an identity from: security find-identity -v -p codesigning'
+    print -u2 'For development without packaged widgets, use: swift run Notchlight'
+    exit 1
+fi
+
 cd "$PROJECT_DIR"
 "${SCRIPT_DIR}/sync-legal.sh" --check
+mkdir -p "$BUILD_DIR"
+STAGING_DIR=$(mktemp -d "${BUILD_DIR}/.notchlight-stage.XXXXXX")
+trap 'rm -rf "$STAGING_DIR"' EXIT
+APP_DIR="${STAGING_DIR}/${APP_NAME}"
+CONTENTS_DIR="${APP_DIR}/Contents"
+RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 print "Building Notchlight in release mode..."
 # Keep the runtime minimum separate from the SDK used for system UI behavior.
 # Some SwiftPM/SwiftBuild toolchains otherwise stamp the SDK as the minimum OS.
@@ -56,7 +69,6 @@ if [[ ! -s "${ICON_BUILD_DIR}/Assets.car" || ! -s "${ICON_BUILD_DIR}/Notchlight.
     exit 1
 fi
 
-rm -rf "$APP_DIR"
 mkdir -p "$RESOURCES_DIR"
 mkdir -p "${CONTENTS_DIR}/MacOS"
 cp "${PRODUCTS_DIR}/Notchlight" "${CONTENTS_DIR}/MacOS/Notchlight"
@@ -76,17 +88,25 @@ plutil -lint "${CONTENTS_DIR}/Info.plist"
 
 "${SCRIPT_DIR}/build-widgets.sh" "$APP_DIR"
 
-if [[ -n "${NOTCHLIGHT_SIGNING_IDENTITY:-}" ]]; then
-    print "Signing with the supplied distribution identity..."
-    codesign --force --options runtime --timestamp --sign "$NOTCHLIGHT_SIGNING_IDENTITY" \
-        --entitlements "${BUILD_DIR}/widget-extension/host.entitlements" "$APP_DIR"
-else
-    print "Signing locally with an ad-hoc signature (not notarized)..."
-    codesign --force --sign - "$APP_DIR"
-fi
-codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+print "Signing with the supplied identity..."
+codesign --force --options runtime --timestamp --sign "$NOTCHLIGHT_SIGNING_IDENTITY" \
+    --entitlements "${BUILD_DIR}/widget-extension/host.entitlements" "$APP_DIR"
+python3 "${SCRIPT_DIR}/verify-widget-package.py" "$APP_DIR"
 
-print "Created: ${APP_DIR}"
+# Promote only a verified bundle, keeping a recoverable copy of the prior app.
+PREVIOUS_APP=""
+if [[ -e "$DESTINATION_APP" ]]; then
+    BACKUP_DIR=$(mktemp -d "${BUILD_DIR}/previous-app.XXXXXX")
+    PREVIOUS_APP="${BACKUP_DIR}/${APP_NAME}"
+    mv "$DESTINATION_APP" "$PREVIOUS_APP"
+fi
+if ! mv "$APP_DIR" "$DESTINATION_APP"; then
+    if [[ -n "$PREVIOUS_APP" ]]; then mv "$PREVIOUS_APP" "$DESTINATION_APP"; fi
+    exit 1
+fi
+if [[ -n "$PREVIOUS_APP" ]]; then print "Previous app preserved: ${PREVIOUS_APP}"; fi
+
+print "Created: ${DESTINATION_APP}"
 if $open_app; then
-    open "$APP_DIR"
+    open "$DESTINATION_APP"
 fi
