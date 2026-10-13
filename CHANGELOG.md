@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.2](https://github.com/Flexxkii/Notchlight/releases/tag/v1.2.2) — 2026-10-13
+
+- Restored signed app-group sharing for widget updates. Packaged builds now
+  reject missing or ad-hoc signing and verify shared-group configuration before
+  replacing the existing app, which is preserved in a backup.
+- Reduced diagnostics export memory by reading logs incrementally and retaining
+  a compact record index. Report text and exported log contents are preserved.
+- Removed the explicit Settings and Show Border shortcuts and notch-menu key
+  equivalents to prevent conflicts with other apps.
+
+[Release notes and download details](docs/releases/1.2.2.md)
+
 ## [1.2.1](https://github.com/Flexxkii/notchlight/releases/tag/v1.2.1) — 2026-10-08
 
 - Reduced repeated display and appearance metadata in diagnostic samples.
