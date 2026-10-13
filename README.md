@@ -153,6 +153,7 @@ repository, your GitHub account must have access.
 git clone https://github.com/Flexxkii/notchlight.git
 cd notchlight
 swift test
+export NOTCHLIGHT_SIGNING_IDENTITY="Your Apple Development or Developer ID identity"
 ./scripts/build-app.sh
 ```
 
@@ -172,10 +173,14 @@ swift run Notchlight
 ./scripts/package-release.sh
 ```
 
-Builds target the build machine's architecture. To use your own distribution
-certificate, set `NOTCHLIGHT_SIGNING_IDENTITY` when building; that enables
-Hardened Runtime and a signing timestamp. Signing alone does not notarize the
-app. Notarization and ticket stapling are separate distribution steps.
+Builds target the build machine's architecture. Packaged builds require
+`NOTCHLIGHT_SIGNING_IDENTITY`, using an identity listed by
+`security find-identity -v -p codesigning`. The host and extension are signed with
+Hardened Runtime and a timestamp. The packaging check validates their signatures,
+signing team, shared app group, extension sandbox, and matching versions before
+replacing the existing bundle. The prior app is preserved under `build/previous-app.*`.
+Without a signing identity, use `swift run Notchlight` for development.
+Signing alone does not notarize the app; notarization and stapling are separate steps.
 
 The editable shipping icon is `Resources/Notchlight.icon`. Open it in Icon
 Composer, make your changes, and rebuild. Root legal documents are canonical;
@@ -197,8 +202,8 @@ NOTCHLIGHT_SIGNING_IDENTITY="Your Apple Development or Developer ID identity" ./
 ```
 
 The script derives the app group from the identity's actual team and signs the
-embedded sandboxed extension before the host. The existing ad-hoc build remains
-available for development, but it cannot authorize widget shared-container
+embedded sandboxed extension before the host. Missing or ad-hoc signing is rejected
+before touching the existing app because it cannot authorize widget shared-container
 access. No signing certificate, team ID, credentials, or profile is committed.
 Launching the packaged app once is required before its widgets can appear in
 the macOS gallery. Open **Edit Widgets**, search for **Notchlight Usage**, and
