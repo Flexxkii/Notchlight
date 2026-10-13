@@ -46,11 +46,9 @@ struct NotchlightApp: App {
             CommandGroup(replacing: .newItem) { }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…", action: model.showSettings)
-                    .keyboardShortcut(",")
             }
             CommandMenu("Border") {
                 Toggle("Show border", isOn: $model.isEnabled)
-                    .keyboardShortcut("b", modifiers: [.command, .shift])
             }
         }
 

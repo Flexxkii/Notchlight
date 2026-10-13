@@ -46,8 +46,10 @@ or simply give your notch a border in a color you like.
 - **First-run hint:** new users see an animated arrow and “Click your notch”
   callout. It disappears when the menu opens, when dismissed, or after 12 seconds.
   Completion is remembered across launches; existing installations skip it.
-- **Keyboard shortcuts:** use **⌘,** for Settings, **⌘⇧B** to toggle the border,
-  and **⌘Q** to quit while the app or its menu is active.
+- **Keyboard shortcuts:** Settings and Show Border have no assigned shortcuts,
+  and the notch menu has no shortcut keys. Use the menu to access these actions.
+  Standard macOS window, text-editing, and app Quit commands remain available
+  while Notchlight is active.
 
 ### Appearance and preview
 
