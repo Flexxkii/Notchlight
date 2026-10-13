@@ -71,7 +71,7 @@ struct NotchHoverPresentationTests {
         #expect(content.resetCaption == "Last known reset")
     }
 
-    @Test("native menu exposes state and settings target")
+    @Test("native menu exposes state and settings target without keyboard shortcuts")
     @MainActor
     func menuStateAndSettingsTarget() throws {
         let suiteName = "NotchlightTests.notch-menu"
@@ -95,6 +95,6 @@ struct NotchHoverPresentationTests {
         #expect(settings.target === controller)
         #expect(settings.action != nil)
         #expect(settings.action.map(NSStringFromSelector) == "showSettings:")
-        #expect(settings.keyEquivalent == ",")
+        #expect(menu.items.allSatisfy { $0.keyEquivalent.isEmpty })
     }
 }

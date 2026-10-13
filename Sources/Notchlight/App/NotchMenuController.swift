@@ -22,15 +22,13 @@ final class NotchMenuController: NSObject {
         connect.state = model?.codexLinked == true ? .on : .off
         menu.addItem(connect)
 
-        let showBorder = NSMenuItem(title: "Show border", action: #selector(toggleBorder(_:)), keyEquivalent: "b")
-        showBorder.keyEquivalentModifierMask = [.command, .shift]
+        let showBorder = NSMenuItem(title: "Show border", action: #selector(toggleBorder(_:)), keyEquivalent: "")
         showBorder.target = self
         showBorder.state = model?.isEnabled == true ? .on : .off
         menu.addItem(showBorder)
         menu.addItem(.separator())
 
-        let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",")
-        settings.keyEquivalentModifierMask = [.command]
+        let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: "")
         settings.target = self
         menu.addItem(settings)
 
@@ -38,8 +36,7 @@ final class NotchMenuController: NSObject {
         export.target = self
         menu.addItem(export)
 
-        let quit = NSMenuItem(title: "Quit Notchlight", action: #selector(quit(_:)), keyEquivalent: "q")
-        quit.keyEquivalentModifierMask = [.command]
+        let quit = NSMenuItem(title: "Quit Notchlight", action: #selector(quit(_:)), keyEquivalent: "")
         quit.target = self
         menu.addItem(quit)
         return menu
