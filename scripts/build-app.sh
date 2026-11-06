@@ -42,6 +42,7 @@ print "Building Notchlight in release mode..."
 DEPLOYMENT_TARGET=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "${PROJECT_DIR}/Resources/Info.plist")
 SDK_VERSION=$(xcrun --sdk macosx --show-sdk-version)
 swift build -c release \
+    -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
     -Xlinker -platform_version -Xlinker macos \
     -Xlinker "$DEPLOYMENT_TARGET" -Xlinker "$SDK_VERSION"
 PRODUCTS_DIR=$(swift build -c release --show-bin-path)
@@ -72,6 +73,18 @@ fi
 mkdir -p "$RESOURCES_DIR"
 mkdir -p "${CONTENTS_DIR}/MacOS"
 cp "${PRODUCTS_DIR}/Notchlight" "${CONTENTS_DIR}/MacOS/Notchlight"
+mkdir -p "${CONTENTS_DIR}/Helpers" "${CONTENTS_DIR}/Frameworks"
+cp "${PRODUCTS_DIR}/NotchlightSignal" "${CONTENTS_DIR}/Helpers/notchlight"
+SPARKLE_SOURCE="${PROJECT_DIR}/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+SPARKLE_FRAMEWORK="${CONTENTS_DIR}/Frameworks/Sparkle.framework"
+ditto "$SPARKLE_SOURCE" "$SPARKLE_FRAMEWORK"
+# Sign nested update helpers inside-out, preserving the downloader's entitlements.
+for sparkle_component in XPCServices/Installer.xpc XPCServices/Downloader.xpc Autoupdate Updater.app; do
+    codesign --force --options runtime --timestamp --preserve-metadata=entitlements \
+        --sign "$NOTCHLIGHT_SIGNING_IDENTITY" "${SPARKLE_FRAMEWORK}/Versions/B/${sparkle_component}"
+done
+codesign --force --options runtime --timestamp --sign "$NOTCHLIGHT_SIGNING_IDENTITY" "$SPARKLE_FRAMEWORK"
+codesign --force --options runtime --timestamp --sign "$NOTCHLIGHT_SIGNING_IDENTITY" "${CONTENTS_DIR}/Helpers/notchlight"
 cp "${PROJECT_DIR}/Resources/Info.plist" "${CONTENTS_DIR}/Info.plist"
 /usr/libexec/PlistBuddy -c "Merge '${ICON_INFO_PLIST}'" "${CONTENTS_DIR}/Info.plist"
 cp -R "${ICON_BUILD_DIR}/." "$RESOURCES_DIR/"
@@ -92,6 +105,7 @@ print "Signing with the supplied identity..."
 codesign --force --options runtime --timestamp --sign "$NOTCHLIGHT_SIGNING_IDENTITY" \
     --entitlements "${BUILD_DIR}/widget-extension/host.entitlements" "$APP_DIR"
 python3 "${SCRIPT_DIR}/verify-widget-package.py" "$APP_DIR"
+python3 "${SCRIPT_DIR}/verify-update-package.py" "$APP_DIR"
 
 # Promote only a verified bundle, keeping a recoverable copy of the prior app.
 PREVIOUS_APP=""

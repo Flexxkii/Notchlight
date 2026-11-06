@@ -17,6 +17,15 @@ final class NotchMenuController: NSObject {
         status.isEnabled = false
         menu.addItem(status)
 
+        if let model {
+            for signal in model.visibleSignals.prefix(8) {
+                let item = NSMenuItem(title: "Dismiss: \(signal.message)", action: #selector(dismissSignal(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = signal.source
+                menu.addItem(item)
+            }
+        }
+
         let connect = NSMenuItem(title: "Connect to Codex", action: #selector(toggleCodex(_:)), keyEquivalent: "")
         connect.target = self
         connect.state = model?.codexLinked == true ? .on : .off
@@ -31,6 +40,11 @@ final class NotchMenuController: NSObject {
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: "")
         settings.target = self
         menu.addItem(settings)
+
+        let update = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates(_:)), keyEquivalent: "")
+        update.target = self
+        update.isEnabled = model?.updates.canCheck == true
+        menu.addItem(update)
 
         let export = NSMenuItem(title: "Export diagnostics…", action: #selector(exportDiagnostics(_:)), keyEquivalent: "")
         export.target = self
@@ -60,5 +74,13 @@ final class NotchMenuController: NSObject {
 
     @objc private func exportDiagnostics(_ sender: NSMenuItem) {
         model?.exportDiagnostics()
+    }
+
+    @objc private func checkForUpdates(_ sender: NSMenuItem) { model?.updates.checkForUpdates() }
+
+    @objc private func dismissSignal(_ sender: NSMenuItem) {
+        guard let source = sender.representedObject as? String,
+              let model, let signal = model.visibleSignals.first(where: { $0.source == source }) else { return }
+        model.signals.dismiss(signal)
     }
 }

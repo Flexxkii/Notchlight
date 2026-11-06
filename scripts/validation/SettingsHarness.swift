@@ -4,6 +4,7 @@ import SwiftUI
 import CodexIntegration
 import Diagnostics
 import Observation
+import StatusSignals
 
 @MainActor @Observable
 final class ValidationState {
@@ -16,6 +17,22 @@ struct ValidationRoot: View {
     var body: some View {
         SettingsView(model: model)
             .environment(\.colorScheme, state.dark ? .dark : .light)
+    }
+}
+
+struct FeatureReviewView: View {
+    let model: BorderModel
+    let state: ValidationState
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            BorderPreview(model: model)
+            SignalSettingsView(model: model)
+            PowerSettingsView(model: model)
+        }
+        .padding(24)
+        .frame(width: 500)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .environment(\.colorScheme, state.dark ? .dark : .light)
     }
 }
 
@@ -54,6 +71,9 @@ final class Harness: NSObject, NSApplicationDelegate {
             ("Default size (500 × 820)", #selector(defaultSize), "2"),
             ("Deactivate window", #selector(deactivate), "3"),
             ("Toggle busy / idle", #selector(toggleWorking), "b"),
+            ("Show attention fixture", #selector(showAttention), "a"),
+            ("Clear signal fixture", #selector(clearSignals), "k"),
+            ("Toggle battery effects fixture", #selector(toggleBattery), "e"),
             ("Settings…", #selector(showSettings), ","),
             ("Legal documents…", #selector(showLegal), "j"),
             ("Quit", #selector(quit), "q")
@@ -66,6 +86,12 @@ final class Harness: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         if CommandLine.arguments.contains("--measure") {
             Task { await measure() }
+        }
+        if CommandLine.arguments.contains("--measure-effects") {
+            Task { await measureEffects() }
+        }
+        if CommandLine.arguments.contains("--capture-features") {
+            Task { await captureFeatures() }
         }
     }
     func setWorking(_ working: Bool) {
@@ -87,6 +113,15 @@ final class Harness: NSObject, NSApplicationDelegate {
         }
     }
     @objc func toggleWorking() { setWorking(!model.codex.isWorking) }
+    @objc func showAttention() {
+        model.signals.record([try! StatusSignal(source: "codex-fixture", state: .attention,
+                                               message: "Codex requested approval", codexSession: "fixture", codexTurn: "fixture")])
+    }
+    @objc func clearSignals() { model.signals.record([]) }
+    @objc func toggleBattery() {
+        model.batteryAwareEffects = true
+        model.power.record(onBattery: !model.power.onBattery, lowPowerMode: false)
+    }
     @objc func showSettings() { window.makeKeyAndOrderFront(nil) }
     private var legalWindow: NSWindow?
     @objc func showLegal() {
@@ -123,6 +158,49 @@ final class Harness: NSObject, NSApplicationDelegate {
             let result: [String: Any] = ["phase": phase, "seconds": elapsed, "cpuPercent": cpu / elapsed * 100, "footprintMiB": Double(after.physicalFootprintBytes) / 1048576, "wakeups": after.interruptWakeups - before.interruptWakeups, "windowVisible": window.isVisible, "windowOccluded": !window.occlusionState.contains(.visible), "minimized": window.isMiniaturized]
             let data = try! JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
             FileHandle.standardOutput.write(data + Data([10]))
+        }
+        NSApp.terminate(nil)
+    }
+
+    func measureEffects() async {
+        model.batteryAwareEffects = true
+        for trial in 1...3 {
+            for reduced in [false, true] {
+                model.power.record(onBattery: reduced, lowPowerMode: false)
+                try? await Task.sleep(for: .seconds(1))
+                let before = try! ProcessResourceSnapshot.read()
+                let start = DispatchTime.now().uptimeNanoseconds
+                try? await Task.sleep(for: .seconds(5))
+                let after = try! ProcessResourceSnapshot.read()
+                let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
+                let cpu = Double((after.userTimeNanoseconds + after.systemTimeNanoseconds) - (before.userTimeNanoseconds + before.systemTimeNanoseconds)) / 1_000_000_000 / elapsed * 100
+                let result: [String: Any] = ["trial": trial, "reduced": reduced, "pulse": model.effectivePulse,
+                                           "cpuPercent": cpu, "wakeups": after.interruptWakeups - before.interruptWakeups,
+                                           "visible": window.isVisible, "occluded": !window.occlusionState.contains(.visible)]
+                FileHandle.standardOutput.write(try! JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) + Data([10]))
+                fflush(stdout)
+            }
+        }
+        NSApp.terminate(nil)
+    }
+
+    func captureFeatures() async {
+        model.customSignalsEnabled = true
+        model.batteryAwareEffects = true
+        model.power.record(onBattery: true, lowPowerMode: false)
+        showAttention()
+        let view = NSHostingView(rootView: FeatureReviewView(model: model, state: state))
+        window.contentView = view
+        let output = URL(fileURLWithPath: "build/feature-research", isDirectory: true)
+        for dark in [true, false] {
+            state.dark = dark
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            window.setContentSize(NSSize(width: 500, height: 900))
+            try? await Task.sleep(for: .milliseconds(500))
+            view.layoutSubtreeIfNeeded()
+            guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { fatalError("No bitmap") }
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try! bitmap.representation(using: .png, properties: [:])!.write(to: output.appendingPathComponent("status-signals-\(dark ? "dark" : "light").png"))
         }
         NSApp.terminate(nil)
     }

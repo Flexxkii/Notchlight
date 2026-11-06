@@ -13,6 +13,8 @@ struct SettingsView: View {
                 BorderPreview(model: model, isWindowVisible: windowState.canAnimate)
                 LaunchAtLoginSettingsView()
                 CodexConnectionView(model: model)
+                SignalSettingsView(model: model)
+                PowerSettingsView(model: model)
                 HoverAppearanceControls(model: model)
                 BorderAppearanceControls(model: model)
                 StripAppearanceControls(model: model)
@@ -20,6 +22,7 @@ struct SettingsView: View {
                     DiagnosticsSettingsView(controller: diagnostics)
                 }
                 LegalSettingsView()
+                UpdateSettingsView(controller: model.updates)
 
                 HStack {
                     Label(model.statusLabel, systemImage: model.hasVisibleLine ? "checkmark.circle.fill" : "circle.dashed")

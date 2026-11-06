@@ -53,7 +53,10 @@ struct BorderAppearanceControls: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                if model.codexLinked {
+                if model.activeSignal != nil {
+                    Text("A status signal is using the full border. Your saved line range returns when the signal clears.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if model.codexLinked {
                     HStack {
                         Text("Line range").font(.subheadline)
                         Spacer()
@@ -81,7 +84,13 @@ struct BorderAppearanceControls: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                if model.codexLinked {
+                if model.effectsReduced {
+                    Label("Glow is off while effects are reduced", systemImage: "leaf")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if model.activeSignal != nil {
+                    Label("Glow follows the current signal", systemImage: "sparkles")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if model.codexLinked {
                     Label("Glow follows Codex activity", systemImage: "sparkles")
                         .font(.caption)
                         .foregroundStyle(.secondary)

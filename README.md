@@ -38,6 +38,14 @@ or simply give your notch a border in a color you like.
 
 ### Notch interactions
 
+- **Attention indicator:** optional Codex hooks show an amber border for explicit
+  approval or input requests. Setup preserves existing hooks and requires a
+  one-time trust review in Codex. No inactivity-based guessing.
+- **Custom local signals:** scripts can show working, success, failure, or
+  attention states using the bundled `notchlight` command. Sources expire
+  independently and can be dismissed from Settings or the notch menu.
+  See the [signal guide](docs/status-signals.md).
+
 - **Hover details:** the notch expands horizontally to show the selected usage
   percentage and reset date/time. Adjust the hover text size in Settings.
 - **Native context menu:** left-click or right-click the notch to connect or
@@ -67,6 +75,13 @@ or simply give your notch a border in a color you like.
   ticks. Appearance reset preserves your Codex connection and usage-display choice.
 
 ### macOS integration
+
+- **Battery-aware effects:** optionally use a static border without glow or
+  animated notch transitions on battery or in Low Power Mode. Saved appearance
+  returns on external power when Low Power Mode is off.
+- **In-app updates:** check for releases, read release notes, and install with
+  relaunch. Sparkle verifies signed feeds and archives before extraction;
+  automatic checks are opt-in. See [software updates](docs/software-updates.md).
 
 - **Launch at login:** start Notchlight automatically when you sign in to your
   Mac. Enable it in **Settings → General**; the checkbox follows macOS's
@@ -100,7 +115,7 @@ CLI and existing sign-in; it does not include a subscription or extra usage.
 ## Download and install
 
 1. Open [Releases](https://github.com/Flexxkii/notchlight/releases).
-2. Download `Notchlight-1.2.3-macOS-arm64.zip`, then unzip it.
+2. Download `Notchlight-1.3.0-macOS-arm64.zip`, then unzip it.
 3. Move `Notchlight.app` to Applications and open it.
 4. Adjust the border, or enable **Connect to Codex** if Codex is installed and
    signed in on your Mac.
@@ -123,7 +138,7 @@ The repository and its releases are public.
 | --- | --- |
 | Operating system | macOS 14 or later |
 | Visible notch border | A supported notched MacBook display |
-| Published 1.2.3 build | Apple Silicon (`arm64`) |
+| Published 1.3.0 build | Apple Silicon (`arm64`) |
 | Optional Codex features | Installed Codex CLI/desktop app and an existing compatible sign-in |
 | Building from source | Full Xcode 26+ with Swift 6.2+ and Icon Composer asset compilation |
 
@@ -159,8 +174,8 @@ export NOTCHLIGHT_SIGNING_IDENTITY="Your Apple Development or Developer ID ident
 ./scripts/build-app.sh
 ```
 
-The app is written in Swift 6 using SwiftUI and AppKit. There are no external
-Swift package dependencies. The script builds a Release executable, compiles
+The app is written in Swift 6 using SwiftUI and AppKit. Sparkle is pinned as the
+software-update dependency. The script builds the app and signal command, compiles
 the Icon Composer asset, bundles the legal documents, verifies them, and signs
 the result locally. It creates `build/Notchlight.app`; it does not install it.
 
@@ -209,9 +224,16 @@ before touching the existing app because it cannot authorize widget shared-conta
 access. No signing certificate, team ID, credentials, or profile is committed.
 Launching the packaged app once is required before its widgets can appear in
 the macOS gallery. Open **Edit Widgets**, search for **Notchlight Usage**, and
-choose a small or medium widget. The 1.2.3 download includes the signed host and extension.
+choose a small or medium widget. The 1.3.0 download includes the signed host and extension.
 
 ## Screenshots
+
+| Attention and power controls, dark | Attention and power controls, light |
+| --- | --- |
+| ![Attention and power controls](docs/images/notchlight-status-signals-dark.png) | ![Attention and power controls in light appearance](docs/images/notchlight-status-signals-light.png) |
+
+These feature images render the real SwiftUI controls with an isolated sample
+approval request and simulated battery state; they contain no account data.
 
 The settings screenshots use the real app views with sample usage data in an
 isolated fixture. They show the in-window notch preview, not a photographed

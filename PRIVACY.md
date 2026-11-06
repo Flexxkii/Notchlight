@@ -1,6 +1,6 @@
 # Notchlight privacy policy
 
-Version 1.1 · Effective 18 September 2026
+Version 1.2 · Effective 7 November 2026
 Maintainer: Flexxkii (https://github.com/Flexxkii)
 Contact: https://github.com/Flexxkii/notchlight/issues
 
@@ -11,6 +11,7 @@ or automatic crash-report upload. The app does not send your settings, activity,
 or diagnostic logs to Flexxkii. Its optional Codex integration communicates with
 your installed Codex CLI; that CLI can contact OpenAI using your existing sign-in.
 Local operation therefore does not mean that Codex makes no network requests.
+Optional software-update checks also contact GitHub as described below.
 
 ## Settings
 
@@ -43,6 +44,41 @@ and every five minutes during healthy idle. Activity follows local file changes,
 with a safety check about once per minute and a two-second polling fallback if
 file notifications are unavailable. Turning off Connect to Codex or quitting
 stops that monitoring.
+
+## Status signals and attention hooks
+
+Optional custom signals store a source name, state, user-supplied status text,
+and creation/expiry times in `~/Library/Application Support/Notchlight/Signals/`.
+The app watches that private local directory; it does not open a network port.
+Any process running as your macOS user can send a signal. Avoid including secrets
+in status messages because they can appear beside the notch and in Settings.
+Signals expire within 24 hours; expired files are removed on the next signal
+write, and dismissal removes the selected file. Quit and delete the Signals
+directory to erase all stored signals.
+
+Attention setup writes Notchlight hooks to the selected Codex home's `hooks.json`,
+preserving existing entries and retaining a backup before modification. Codex
+requires you to review and trust these hooks. Hook inputs may include tool
+arguments in memory, but Notchlight decodes only event and correlation fields;
+it saves only hashed session/turn identifiers, fixed status text, and timestamps.
+It never sends hook inputs elsewhere, reads the referenced transcript, or makes
+approval decisions. Turning off the indicator hides its signals; disable or
+remove its hooks in Codex to stop the helper being invoked.
+
+## Software updates and power state
+
+Manual update checks and opt-in automatic checks contact GitHub to retrieve a
+signed release feed and, when you choose installation, a signed app archive.
+GitHub receives normal network request information such as your IP address and
+user agent. No settings, account details, conversation content, diagnostic logs,
+or custom signal messages are included. Sparkle system-profile reporting is not
+enabled. Automatic checks are off by default, and unattended installation is
+disabled. Disabling automatic checks stops scheduled update requests; manual
+checks remain available.
+
+Battery-aware effects read macOS power-source and Low Power Mode state locally.
+These values control rendering and can appear as Boolean diagnostic context;
+they are not uploaded and do not change system power settings.
 
 ## Desktop widgets
 

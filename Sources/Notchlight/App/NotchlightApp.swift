@@ -44,6 +44,10 @@ struct NotchlightApp: App {
                 }
             }
             CommandGroup(replacing: .newItem) { }
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…", action: model.updates.checkForUpdates)
+                    .disabled(!model.updates.canCheck)
+            }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…", action: model.showSettings)
             }

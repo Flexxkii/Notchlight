@@ -10,12 +10,14 @@ validation_sources=("$validation_app_sources"/**/*.swift)
 validation_sources=(${validation_sources:#*/NotchlightApp.swift})
 if [[ -d "$validation_products/Modules" ]]; then
     validation_modules="$validation_products/Modules"
-    validation_objects=("$validation_products"/{BorderOverlay,CodexIntegration,Diagnostics,WidgetShared}.build/*.o)
+    validation_objects=("$validation_products"/{BorderOverlay,CodexIntegration,Diagnostics,WidgetShared,StatusSignals}.build/*.o)
 else
     validation_modules="$validation_products"
-    validation_objects=("$validation_products"/{BorderOverlay,CodexIntegration,Diagnostics,WidgetShared}.o)
+    validation_objects=("$validation_products"/{BorderOverlay,CodexIntegration,Diagnostics,WidgetShared,StatusSignals}.o)
 fi
 mkdir -p "${validation_output:h}"
 swiftc -O -g -parse-as-library -swift-version 6 -target "$(uname -m)-apple-macos14.0" \
     -sdk "$(xcrun --sdk macosx --show-sdk-path)" -I "$validation_modules" \
+    -F "$validation_project_dir/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64" \
+    -Xlinker -rpath -Xlinker "$validation_project_dir/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64" \
     $validation_sources scripts/validation/SettingsHarness.swift $validation_objects -o "$validation_output"
