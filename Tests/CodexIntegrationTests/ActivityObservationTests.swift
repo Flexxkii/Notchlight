@@ -275,6 +275,68 @@ struct ActivityObservationTests {
         #expect(try f.reads().last?["outcome"] as? String == "unavailable")
     }
 
+    @Test("a usable cached catalog avoids WAL retries while session events remain prompt")
+    func cachedWALDoesNotRetry() async throws {
+        var timing = Fixture.timing
+        timing.catalog = 0.01
+        timing.catalogRetry = 0.02
+        timing.catalogRetryMaximum = 0.04
+        let f = try Fixture(timing: timing)
+        defer { f.close() }
+        try await f.start()
+        try f.sql("PRAGMA journal_mode=WAL")
+        f.watcher.emit(ActivityFileChanges(catalog: true))
+        try await wait { (try? f.reads(operation: "databaseQuery").last?["errorCategory"] as? String) == "walUnavailable" }
+        let count = try f.reads(operation: "databaseQuery").count
+        try f.append("task_started"); f.emit()
+        try await wait { f.values.last?.isWorking == true }
+        try await Task.sleep(for: .milliseconds(180))
+        #expect(try f.reads(operation: "databaseQuery").count == count)
+        try f.append("task_complete"); f.emit()
+        try await wait { f.values.last?.isWorking == false }
+        #expect(f.values.last?.isAvailable == true)
+    }
+
+    @Test("the safety reconciliation recovers a cached WAL gap even if recreation notification is lost")
+    func cachedWALSafetyRecovery() async throws {
+        var timing = Fixture.timing
+        timing.catalog = 0.01
+        timing.safety = 0.25
+        let f = try Fixture(timing: timing)
+        defer { f.close() }
+        try await f.start()
+        try f.sql("PRAGMA journal_mode=WAL")
+        f.watcher.emit(ActivityFileChanges(catalog: true))
+        try await wait { (try? f.reads(operation: "databaseQuery").last?["errorCategory"] as? String) == "walUnavailable" }
+        var database: OpaquePointer?
+        #expect(sqlite3_open(f.root.appendingPathComponent("state_1.sqlite").path, &database) == SQLITE_OK)
+        defer { sqlite3_close(database) }
+        try Fixture.event("task_started").write(to: f.root.appendingPathComponent("sessions/new.jsonl"))
+        #expect(sqlite3_exec(database, "UPDATE threads SET archived=1; INSERT INTO threads VALUES ('new.jsonl', 0, 999)", nil, nil, nil) == SQLITE_OK)
+        // Deliberately emit no watcher event.
+        try await wait { f.values.last?.isWorking == true }
+        #expect(try f.reads().last?["reason"] as? String == "safety")
+        #expect(f.values.last?.activeTaskCount == 1)
+    }
+
+    @Test("a cached WAL gap still retries when the native watcher is unavailable")
+    func cachedWALWithoutWatcher() async throws {
+        var timing = Fixture.timing
+        timing.catalog = 0.01
+        timing.catalogRetry = 0.02
+        timing.catalogRetryMaximum = 0.04
+        let f = try Fixture(timing: timing, watcherWorks: false)
+        defer { f.close() }
+        try await f.start()
+        try f.sql("PRAGMA journal_mode=WAL")
+        f.observation.environmentChanged(.wake)
+        try await wait { (try? f.reads(operation: "databaseQuery").last?["errorCategory"] as? String) == "walUnavailable" }
+        let count = try f.reads(operation: "databaseQuery").count
+        try await wait { ((try? f.reads(operation: "databaseQuery").count) ?? 0) > count }
+        #expect(try f.reads().last?["reason"] as? String == "catalogRetry")
+        #expect(f.values.last?.isAvailable == true)
+    }
+
     @Test("catalog churn is coalesced while existing session events remain prompt")
     func catalogCoalescing() async throws {
         var timing = Fixture.timing

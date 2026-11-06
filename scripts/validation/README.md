@@ -82,3 +82,37 @@ JSON records include process CPU-time deltas, wakeup deltas, detector metadata
 checks, reads, bytes, and latency. These are isolated detector measurements, not
 a promised CPU percentage for the full application. Fixtures remove their own
 temporary files and exit after each trial.
+
+## Activity parsing and cached catalog recovery
+
+`ActivityRecoveryHarness.swift` measures two isolated release workloads using
+temporary synthetic data. Save the baseline release products before changing
+the integration target, then compile this same harness against both versions:
+
+```sh
+swift build -c release
+ditto "$(swift build -c release --show-bin-path)" build/activity-recovery-baseline-products
+zsh scripts/validation/build-activity-recovery-harness.sh build/activity-recovery-before build/activity-recovery-baseline-products
+# After implementing the change:
+swift build -c release
+zsh scripts/validation/build-activity-recovery-harness.sh build/activity-recovery-after
+build/activity-recovery-before 1
+build/activity-recovery-after 1
+build/activity-recovery-before --wal 1
+build/activity-recovery-after --wal 1
+```
+
+Run three trials per implementation sequentially, without concurrent builds,
+tests, or profilers. The default scenario warms the filesystem/runtime once,
+then reads a 7.9 MiB mixed log five times with fresh reader caches. It checks the
+final lifecycle classification and reports elapsed time, process CPU time,
+wakeups, and endpoint footprint. These are isolated reader measurements, not
+full-app CPU or battery-life estimates.
+
+`--wal` requires Codex Desktop to be running, but watches only the fixture's
+temporary directory. After caching a valid catalog it removes the WAL through
+SQLite's normal close behavior, measures query attempts for 12 seconds, then
+recreates the WAL and appends a task-start event with both writers held open.
+It checks that cached activity stayed available and reports recovery latency.
+Diagnostics are enabled only in this scenario. The fixture changes no user
+preferences or Codex data and removes its own temporary files on exit.
