@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.0](https://github.com/Flexxkii/notchlight/releases/tag/v1.3.0) — 2026-11-07
+
+- Show explicit Codex approval/input requests through optional local hooks.
+- Accept expiring local status signals from the bundled command-line helper.
+- Check for signed updates, show release notes, install, and relaunch with Sparkle.
+- Optionally reduce effects on battery power or in Low Power Mode.
+
+[Release notes](docs/releases/1.3.0.md)
+
 ## [1.2.3](https://github.com/Flexxkii/Notchlight/releases/tag/v1.2.3) — 2026-11-06
 
 - Pause usage refreshes during system sleep, preserve the last successful usage,

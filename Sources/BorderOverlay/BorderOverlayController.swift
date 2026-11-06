@@ -33,7 +33,9 @@ public final class BorderOverlayController {
     private var strips = BorderStripStyle()
     private var hoverContent = NotchHoverContent()
     private var hoverStyle = NotchHoverStyle()
-    private var reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    private var systemReduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    private var reduceEffects = false
+    private var reduceMotion: Bool { systemReduceMotion || reduceEffects }
     private var hideWhenSwipingEnabled = false
     private var swipeEventSession: SwipeEventTapSession?
     private var swipeGestureActive = false
@@ -82,7 +84,8 @@ public final class BorderOverlayController {
         color: NSColor = NSColor(srgbRed: 1, green: 0.04, blue: 0.08, alpha: 1),
         strips: BorderStripStyle = BorderStripStyle(),
         hoverContent: NotchHoverContent = NotchHoverContent(),
-        hoverStyle: NotchHoverStyle = NotchHoverStyle()
+        hoverStyle: NotchHoverStyle = NotchHoverStyle(),
+        reduceEffects: Bool = false
     ) {
         let measureDuration = diagnostics.isEnabled
         let startedAt = measureDuration ? DispatchTime.now().uptimeNanoseconds : 0
@@ -98,6 +101,7 @@ public final class BorderOverlayController {
         self.strips = strips
         self.hoverContent = hoverContent
         self.hoverStyle = hoverStyle
+        self.reduceEffects = reduceEffects
         installMouseMonitorsIfNeeded()
         refreshDisplayState()
         synchronizePanels()
@@ -301,7 +305,7 @@ public final class BorderOverlayController {
                     if name != NSWorkspace.accessibilityDisplayOptionsDidChangeNotification {
                         self?.sessionIsActive = true
                     }
-                    self?.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                    self?.systemReduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
                     self?.displaysChanged()
                     self?.refreshSwipeMonitoring()
                 }

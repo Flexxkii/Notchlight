@@ -3,11 +3,18 @@ import BorderOverlay
 import Observation
 import CodexIntegration
 import Diagnostics
+import StatusSignals
 
 @MainActor
 @Observable
 final class BorderModel {
     let codex: CodexMonitor
+    let signals = SignalMonitor()
+    let power = PowerMonitor()
+    let updates: UpdateController
+    var attentionEnabled: Bool { didSet { reconcileSignals(); saveAndApply() } }
+    var customSignalsEnabled: Bool { didSet { reconcileSignals(); saveAndApply() } }
+    var batteryAwareEffects: Bool { didSet { saveAndApply() } }
     @ObservationIgnored let diagnostics: DiagnosticRecorder
     @ObservationIgnored private let widgetPublisher: WidgetSnapshotPublisher?
     var codexLinked: Bool {
@@ -16,6 +23,7 @@ final class BorderModel {
                 if codexLinked { codex.start() } else { codex.stop() }
             }
             handleCodexChange()
+            reconcileSignals()
             saveAndApply()
         }
     }
@@ -127,11 +135,44 @@ final class BorderModel {
     var hasTarget: Bool { detectedNotchCount > 0 }
     var selectedUsage: CodexUsageValue? { codex.usage?.value(for: codexWindow) }
     var selectedUsagePercentage: Double? { selectedUsage.map { codexUsageDisplay.percentage(for: $0) } }
-    var effectiveStartPercentage: Double { codexLinked ? 0 : startPercentage }
-    var effectiveEndPercentage: Double { codexLinked ? selectedUsagePercentage ?? 0 : endPercentage }
-    var effectiveGlow: Bool { codexLinked ? codex.isWorking : glow }
-    var effectivePulse: Bool { codexLinked && codex.isWorking }
-    var effectiveBorderColor: Color { codexLinked && codex.isWorking ? workingColor : borderColor }
+    var visibleSignals: [StatusSignal] {
+        signals.signals.filter { $0.isCodex ? attentionEnabled && codexLinked : customSignalsEnabled }
+    }
+    var activeSignal: StatusSignal? { visibleSignals.first }
+    var effectsReduced: Bool { batteryAwareEffects && (power.onBattery || power.lowPowerMode) }
+    var effectiveStartPercentage: Double { activeSignal != nil || codexLinked ? 0 : startPercentage }
+    var effectiveEndPercentage: Double { activeSignal != nil ? 100 : (codexLinked ? selectedUsagePercentage ?? 0 : endPercentage) }
+    var effectiveGlow: Bool {
+        guard !effectsReduced else { return false }
+        if let activeSignal { return activeSignal.state == .working }
+        return codexLinked ? codex.isWorking : glow
+    }
+    var effectivePulse: Bool {
+        guard !effectsReduced else { return false }
+        if let activeSignal { return activeSignal.state == .working }
+        return codexLinked && codex.isWorking
+    }
+    var effectiveBorderColor: Color {
+        if let activeSignal {
+            return switch activeSignal.state {
+            case .attention: .orange
+            case .failure: .red
+            case .success: .green
+            case .working: workingColor
+            }
+        }
+        return codexLinked && codex.isWorking ? workingColor : borderColor
+    }
+    var hoverContent: NotchHoverContent {
+        if let activeSignal {
+            return NotchHoverContent(usageText: activeSignal.state.title,
+                                     usageCaption: activeSignal.isCodex ? "Codex request" : activeSignal.source,
+                                     resetText: activeSignal.message, resetCaption: "Status signal")
+        }
+        return NotchHoverPresentation.make(isLinked: codexLinked, usage: selectedUsage,
+                                          isRefreshing: codex.isRefreshing, isStale: codex.usageError != nil,
+                                          display: codexUsageDisplay)
+    }
     var stripStyle: BorderStripStyle {
         BorderStripStyle(
             isEnabled: stripsEnabled, thickness: stripThickness, length: stripLength,
@@ -142,6 +183,7 @@ final class BorderModel {
     }
     var effectiveIsEnabled: Bool {
         guard !servicesStopped else { return false }
+        if activeSignal != nil { return isEnabled }
         return ActivityVisibilityPolicy.isVisible(
             masterEnabled: isEnabled, filterEnabled: showOnlyWhileWorking,
             linked: codexLinked, available: codex.activity?.isAvailable == true,
@@ -152,6 +194,7 @@ final class BorderModel {
     var hasVisibleLine: Bool { effectiveIsEnabled && hasTarget && effectiveEndPercentage > effectiveStartPercentage }
     var statusLabel: String {
         if !isEnabled { return "Border paused" }
+        if let activeSignal { return "\(activeSignal.state.title) · \(activeSignal.message)" }
         if showOnlyWhileWorking && !effectiveIsEnabled { return "Waiting for Codex activity" }
         if !hasTarget { return "No camera notch detected" }
         if codexLinked {
@@ -167,6 +210,7 @@ final class BorderModel {
     init(defaults: UserDefaults = .standard, startIntegration: Bool = true, startOverlay: Bool = true,
          diagnostics: DiagnosticRecorder = .disabled) {
         self.diagnostics = diagnostics
+        updates = UpdateController(start: startIntegration)
         widgetPublisher = startIntegration ? WidgetSnapshotPublisher(diagnostics: diagnostics) : nil
         codex = CodexMonitor(diagnostics: diagnostics)
         overlay = BorderOverlayController(diagnostics: diagnostics)
@@ -184,6 +228,9 @@ final class BorderModel {
             overlay.offerNotchMenuHint { menuHintEligibility.complete() }
         }
         defaults.register(defaults: [
+            "signals.attentionEnabled": true,
+            "signals.customEnabled": false,
+            "effects.batteryAware": false,
             "border.enabled": true,
             "border.hideWhenSwiping": false,
             "border.showOnlyWhileWorking": false,
@@ -213,6 +260,9 @@ final class BorderModel {
             "codex.window": CodexUsageWindow.automatic.rawValue,
             "codex.usageDisplay": CodexUsageDisplay.used.rawValue
         ])
+        attentionEnabled = defaults.bool(forKey: "signals.attentionEnabled")
+        customSignalsEnabled = defaults.bool(forKey: "signals.customEnabled")
+        batteryAwareEffects = defaults.bool(forKey: "effects.batteryAware")
         codexLinked = defaults.bool(forKey: "codex.linked")
         codexWindow = CodexUsageWindow(rawValue: defaults.string(forKey: "codex.window") ?? "") ?? .automatic
         codexUsageDisplay = CodexUsageDisplay(rawValue: defaults.string(forKey: "codex.usageDisplay") ?? "") ?? .used
@@ -260,6 +310,9 @@ final class BorderModel {
         overlay.menuProvider = { [weak self] in self?.notchMenuController.makeMenu() ?? NSMenu() }
         codex.onChange = { [weak self] in self?.handleCodexChange() }
         codex.onWidgetChange = { [weak self] in self?.publishWidgetSnapshot() }
+        signals.onChange = { [weak self] in self?.apply() }
+        power.onChange = { [weak self] in self?.apply() }
+        if startIntegration { power.start(); reconcileSignals() }
         apply()
         publishWidgetSnapshot()
         if codexLinked && startIntegration { codex.start() }
@@ -305,10 +358,21 @@ final class BorderModel {
         servicesStopped = true
         clearActivityHistory()
         codex.stop()
+        signals.stop()
+        power.stop()
         overlay.stop()
     }
 
+    private func reconcileSignals() {
+        guard integrationAllowed, !servicesStopped else { return }
+        if customSignalsEnabled || (attentionEnabled && codexLinked) { signals.start() }
+        else { signals.stop() }
+    }
+
     private func saveAndApply() {
+        defaults.set(attentionEnabled, forKey: "signals.attentionEnabled")
+        defaults.set(customSignalsEnabled, forKey: "signals.customEnabled")
+        defaults.set(batteryAwareEffects, forKey: "effects.batteryAware")
         defaults.set(isEnabled, forKey: "border.enabled")
         defaults.set(hideWhenSwiping, forKey: "border.hideWhenSwiping")
         defaults.set(showOnlyWhileWorking, forKey: "border.showOnlyWhileWorking")
@@ -354,6 +418,10 @@ final class BorderModel {
             "border_effective_enabled": .bool(effectiveIsEnabled),
             "glow_enabled": .bool(effectiveGlow),
             "pulse_requested": .bool(effectivePulse),
+            "effects_reduced": .bool(effectsReduced),
+            "power_on_battery": .bool(power.onBattery),
+            "power_low_power_mode": .bool(power.lowPowerMode),
+            "status_signal_count": .int(Int64(visibleSignals.count)),
             "show_only_while_working": .bool(showOnlyWhileWorking),
             "inactivity_timeout_minutes": .double(inactivityTimeoutMinutes),
             "line_width_points": .double(lineWidth),
@@ -366,12 +434,9 @@ final class BorderModel {
             isEnabled: effectiveIsEnabled, lineWidth: lineWidth, padding: padding, glow: effectiveGlow, pulse: effectivePulse,
             startPercentage: effectiveStartPercentage, endPercentage: effectiveEndPercentage, color: resolvedEffectiveColor,
             strips: stripStyle,
-            hoverContent: NotchHoverPresentation.make(
-                isLinked: codexLinked, usage: selectedUsage,
-                isRefreshing: codex.isRefreshing, isStale: codex.usageError != nil,
-                display: codexUsageDisplay
-            ),
-            hoverStyle: NotchHoverStyle(textSize: hoverTextSize)
+            hoverContent: hoverContent,
+            hoverStyle: NotchHoverStyle(textSize: hoverTextSize),
+            reduceEffects: effectsReduced
         )
         overlay.setHideWhenSwiping(hideWhenSwiping)
         syncStatus()

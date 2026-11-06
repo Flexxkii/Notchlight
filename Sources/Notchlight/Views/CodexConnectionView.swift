@@ -4,6 +4,16 @@ import SwiftUI
 struct CodexConnectionView: View {
     @Bindable var model: BorderModel
 
+    private var activityLabel: String {
+        if let signal = model.activeSignal {
+            if signal.isCodex { return signal.message }
+            return model.codex.isWorking ? "Codex is working · custom signal shown" : "Custom signal shown"
+        }
+        guard model.codex.activity?.isAvailable == true else { return "Activity unavailable · glow off" }
+        guard model.codex.isWorking else { return "Codex is idle · glow off" }
+        return model.effectsReduced ? "Codex is working · reduced effects" : "Codex is working · glow on"
+    }
+
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 14) {
@@ -58,10 +68,8 @@ struct CodexConnectionView: View {
 
                     HStack {
                         Label(
-                            model.codex.activity?.isAvailable == true
-                                ? (model.codex.isWorking ? "Codex is working · glow on" : "Codex is idle · glow off")
-                                : "Activity unavailable · glow off",
-                            systemImage: model.codex.isWorking ? "sparkles" : "circle.dashed"
+                            activityLabel,
+                            systemImage: model.activeSignal?.state == .attention ? "exclamationmark.bubble" : (model.codex.isWorking ? "sparkles" : "circle.dashed")
                         )
                         .font(.caption)
                         .foregroundStyle(model.codex.isWorking ? Color.primary : Color.secondary)

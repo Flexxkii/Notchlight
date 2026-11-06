@@ -15,9 +15,23 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.2.3</string>
+	<string>1.3.0</string>
 	<key>CFBundleVersion</key>
-	<string>10</string>
+	<string>11</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/Flexxkii/notchlight/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>u5Zb484iqfascx93p3URE9INY7804EPoFd0Eg+1pk8w=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<key>SURequireSignedFeed</key>
+	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Flexxkii. PolyForm Noncommercial 1.0.0 or PolyForm Internal Use 1.0.0.</string>
 	<key>LSMinimumSystemVersion</key>

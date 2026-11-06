@@ -8,6 +8,7 @@ struct BorderPreview: View {
     @Environment(\.colorSchemeContrast) private var contrast
 
     private var previewTitle: String {
+        if let signal = model.activeSignal { return signal.message }
         if model.codexLinked {
             guard let usage = model.selectedUsage else { return "Waiting for Codex usage" }
             return "\(model.codexUsageDisplay.formattedPercentage(for: usage)) \(usage.title.lowercased()) \(model.codexUsageDisplay.description)"
@@ -16,6 +17,8 @@ struct BorderPreview: View {
     }
 
     private var previewSubtitle: String {
+        if let signal = model.activeSignal { return signal.state.title.uppercased() }
+        if model.effectsReduced { return "BATTERY-AWARE EFFECTS · STATIC BORDER" }
         if model.isEnabled && model.showOnlyWhileWorking && !model.effectiveIsEnabled {
             return "WAITING FOR CODEX ACTIVITY"
         }
