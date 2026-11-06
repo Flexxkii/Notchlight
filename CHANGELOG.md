@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.2.3](https://github.com/Flexxkii/Notchlight/releases/tag/v1.2.3) — 2026-11-06
+
+- Pause usage refreshes during system sleep, preserve the last successful usage,
+  and refresh on wake. Cancelled requests cannot overwrite newer results.
+- Speed up large activity-log reads by decoding only lifecycle metadata,
+  scanning each buffer once, and reusing date formatters within a batch.
+- Avoid redundant database retries during missing-WAL gaps when cached sessions
+  and native file notifications remain usable. Recovery safeguards remain active.
+
+[Release notes and download details](docs/releases/1.2.3.md)
+
 ## [1.2.2](https://github.com/Flexxkii/Notchlight/releases/tag/v1.2.2) — 2026-10-13
 
 - Restored signed app-group sharing for widget updates. Packaged builds now
