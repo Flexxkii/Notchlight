@@ -269,7 +269,12 @@ public final class CodexActivityObservation {
                 self.pending.catalog = true
                 self.lastCatalog = .distantPast
             }
-            self.updateCatalogRecovery(unavailable: result.catalogUnavailable)
+            // A checkpoint can remove the WAL while cached sessions remain
+            // usable. Prefer native catalog events, with safety reconciliation
+            // bounding recovery if a notification is missed, over extra retries.
+            // Keep fast recovery for a cold/invalid catalog or a failed watcher.
+            self.updateCatalogRecovery(unavailable: result.catalogUnavailable
+                && (!result.usingCachedCatalog || !self.watching))
             self.publish(result)
             self.scheduleBatch(after: self.pending.catalog && self.pending.paths.isEmpty
                 ? max(self.timing.batch, self.timing.catalog - Date().timeIntervalSince(self.lastCatalog)) : nil)

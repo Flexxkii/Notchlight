@@ -103,6 +103,52 @@ struct CodexActivityTests {
         #expect(!state.discardingPartialLine)
     }
 
+    @Test("metadata-only decoding ignores nested lifecycle lookalikes and handles reordered escaped keys")
+    func metadataOnlyDecoding() {
+        var state = state(lifecycle: .unknown, age: 0)
+        let data = Data(#"{"payload":{"type":"task_started","nested":{"type":"event_msg"}},"type":"response_item","timestamp":42}"#.utf8)
+            + Data([10])
+            + Data(#"{"payload":{"content":"☀️ \"type\": task_complete","type":"task_started"},"timestamp":"1970-01-01T02:46:40Z","\u0074ype":"event_msg"}"#.utf8)
+            + Data([10])
+        let result = CodexActivityParser.consume(data: data, state: &state, launchDate: nil)
+        #expect(result.parsedRecords == 2)
+        #expect(result.parseFailures == 0)
+        #expect(state.lifecycle == .active)
+        #expect(state.lastLifecycleAt == now)
+    }
+
+    @Test("malformed records still count as failures and do not hide later lifecycle events")
+    func malformedRecordsAndMixedDates() {
+        var state = state(lifecycle: .unknown, age: 0)
+        let invalid = Data("not-json\n[]\n{\"type\":\"response_item\",\"ignored\": [}\n".utf8)
+        let badDate = Data("{\"type\":\"event_msg\",\"timestamp\":false,\"payload\":{\"type\":\"task_started\"}}\n".utf8)
+        let whole = Data("{\"type\":\"event_msg\",\"timestamp\":\"1970-01-01T02:46:39Z\",\"payload\":{\"type\":\"task_started\"}}\n".utf8)
+        let fractional = event(type: "task_complete", at: now)
+        let result = CodexActivityParser.consume(data: invalid + badDate + whole + fractional, state: &state, launchDate: nil)
+        #expect(result.parsedRecords == 3)
+        #expect(result.parseFailures == 4)
+        #expect(state.lifecycle == .idle)
+        #expect(state.lastLifecycleAt == now)
+        #expect(state.pending.isEmpty)
+    }
+
+    @Test("multi-record buffers preserve every possible partial-line boundary")
+    func everyChunkBoundary() {
+        let data = event(type: "task_started", at: now.addingTimeInterval(-1))
+            + Data("{\"type\":\"response_item\",\"payload\":{\"content\":\"ignored\"}}\n".utf8)
+            + event(type: "task_complete", at: now)
+        for split in 0...data.count {
+            var state = state(lifecycle: .unknown, age: 0)
+            let first = CodexActivityParser.consume(data: data.prefix(split), state: &state, launchDate: nil)
+            let second = CodexActivityParser.consume(data: data.dropFirst(split), state: &state, launchDate: nil)
+            #expect(first.parsedRecords + second.parsedRecords == 3)
+            #expect(first.parseFailures + second.parseFailures == 0)
+            #expect(state.lifecycle == .idle)
+            #expect(state.lastLifecycleAt == now)
+            #expect(state.pending.isEmpty)
+        }
+    }
+
     @Test("multiple active session paths are counted")
     func multipleActiveTasks() {
         let states = [state(lifecycle: .active, age: 3), state(lifecycle: .active, age: 30)]

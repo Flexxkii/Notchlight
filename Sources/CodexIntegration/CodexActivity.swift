@@ -190,6 +190,7 @@ public actor CodexActivityReader {
         return ActivityRefresh(snapshot: result.snapshot, nextExpiry: result.nextExpiry,
             catalogNeeded: unknownPath && !needsCatalog,
             catalogUnavailable: !catalogAvailable,
+            usingCachedCatalog: !catalogAvailable && catalogWaitingForWAL && !rolloutPaths.isEmpty,
             watchTargets: ActivityWatchTargets(sessions: allowed, catalogs: catalogWatchPaths))
     }
 
@@ -408,6 +409,7 @@ struct ActivityRefresh: Sendable {
     var nextExpiry: Date? = nil
     var catalogNeeded = false
     var catalogUnavailable = false
+    var usingCachedCatalog = false
     var watchTargets: ActivityWatchTargets? = nil
 }
 
@@ -456,22 +458,32 @@ enum CodexActivityParser {
             state.discardingPartialLine = false
         }
         state.pending.append(incoming)
-        while let newline = state.pending.firstIndex(of: 10) {
+        // Keep the buffer intact while scanning. Removing its prefix per record
+        // can repeatedly copy the remaining megabytes when Data shares storage.
+        var cursor = state.pending.startIndex
+        let decoder = JSONDecoder()
+        var fractionalFormatter: ISO8601DateFormatter?
+        var wholeSecondsFormatter: ISO8601DateFormatter?
+        while let newline = state.pending[cursor...].firstIndex(of: 10) {
             if Task.isCancelled { break }
-            let line = state.pending.prefix(upTo: newline)
-            state.pending.removeSubrange(...newline)
-            guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any] else {
+            let line = state.pending[cursor..<newline]
+            cursor = state.pending.index(after: newline)
+            guard let record = try? decoder.decode(ActivityRecord.self, from: Data(line)) else {
                 parseFailures += 1
                 continue
             }
             parsedRecords += 1
-            guard object["type"] as? String == "event_msg" else { continue }
-            guard let eventDate = eventDate(from: object) else {
+            guard record.type == "event_msg" else { continue }
+            // Formatters are local to this consume call: no shared mutable
+            // formatter crosses reader actors, and setup is amortized per batch.
+            guard let timestamp = record.timestamp,
+                  let eventDate = eventDate(from: timestamp, fractional: &fractionalFormatter,
+                                            wholeSeconds: &wholeSecondsFormatter) else {
                 parseFailures += 1
                 continue
             }
             if let launchDate, eventDate < launchDate { continue }
-            guard let payload = object["payload"] as? [String: Any], let type = payload["type"] as? String else {
+            guard let type = record.payload?.type else {
                 parseFailures += 1
                 continue
             }
@@ -490,6 +502,7 @@ enum CodexActivityParser {
                 break
             }
         }
+        state.pending.removeSubrange(..<cursor)
         if state.pending.count > 64 * 1024 {
             state.pending.removeAll(keepingCapacity: false)
             state.discardingPartialLine = true
@@ -497,14 +510,45 @@ enum CodexActivityParser {
         return ParseResult(parsedRecords: parsedRecords, parseFailures: parseFailures)
     }
 
-    private static func eventDate(from object: [String: Any]) -> Date? {
-        guard let value = object["timestamp"] as? String else { return nil }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: value) ?? {
+    /// Decode only lifecycle metadata, without materializing message text, tool
+    /// output, or nested content. JSONDecoder still validates each complete line.
+    private struct ActivityRecord: Decodable {
+        let type: String?
+        let timestamp: String?
+        let payload: Payload?
+
+        enum CodingKeys: String, CodingKey { case type, timestamp, payload }
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            type = try? values.decode(String.self, forKey: .type)
+            if type == "event_msg" {
+                timestamp = try? values.decode(String.self, forKey: .timestamp)
+                payload = try? values.decode(Payload.self, forKey: .payload)
+            } else {
+                timestamp = nil
+                payload = nil
+            }
+        }
+
+        struct Payload: Decodable {
+            let type: String?
+        }
+    }
+
+    private static func eventDate(from value: String, fractional: inout ISO8601DateFormatter?,
+                                  wholeSeconds: inout ISO8601DateFormatter?) -> Date? {
+        if fractional == nil {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            fractional = formatter
+        }
+        if let date = fractional?.date(from: value) { return date }
+        if wholeSeconds == nil {
+            let formatter = ISO8601DateFormatter()
             formatter.formatOptions = [.withInternetDateTime]
-            return formatter.date(from: value)
-        }()
+            wholeSeconds = formatter
+        }
+        return wholeSeconds?.date(from: value)
     }
 }
 

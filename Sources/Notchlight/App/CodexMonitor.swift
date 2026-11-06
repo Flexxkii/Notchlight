@@ -1,3 +1,4 @@
+import AppKit
 import CodexIntegration
 import Foundation
 import Observation
@@ -16,23 +17,57 @@ final class CodexMonitor {
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored var onWidgetChange: (() -> Void)?
     @ObservationIgnored private(set) var widgetActivity: CodexActivitySnapshot?
-    @ObservationIgnored private let accountObserver = CodexAccountChangeObserver()
-    @ObservationIgnored private let usageReader: CodexUsageReader
+    @ObservationIgnored private let accountObserver: CodexAccountChangeObserver
+    @ObservationIgnored private let readUsage: @Sendable () async -> CodexUsageReadResult
     @ObservationIgnored private let activityObservation: CodexActivityObservation
     @ObservationIgnored private let diagnostics: DiagnosticRecorder
     @ObservationIgnored private var usageTask: Task<Void, Never>?
     @ObservationIgnored private var activityTask: Task<Void, Never>?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var usageGeneration = 0
+    @ObservationIgnored private var sleeping = false
+    @ObservationIgnored private let workspaceNotificationCenter: NotificationCenter
+    @ObservationIgnored private var systemObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var accountFingerprint: String?
     @ObservationIgnored private var nextUsageRefresh = Date.distantPast
 
     var isWorking: Bool { activity?.isAvailable == true && activity?.isWorking == true }
 
-    init(diagnostics: DiagnosticRecorder = .disabled) {
+    init(diagnostics: DiagnosticRecorder = .disabled, codexHome: URL? = nil,
+         workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
+         readUsage: (@Sendable () async -> CodexUsageReadResult)? = nil) {
         self.diagnostics = diagnostics
-        usageReader = CodexUsageReader(diagnostics: diagnostics)
-        activityObservation = CodexActivityObservation(diagnostics: diagnostics)
+        self.workspaceNotificationCenter = workspaceNotificationCenter
+        let reader = CodexUsageReader(diagnostics: diagnostics)
+        self.readUsage = readUsage ?? { await reader.readAccountAware() }
+        accountObserver = CodexAccountChangeObserver(root: codexHome)
+        activityObservation = CodexActivityObservation(diagnostics: diagnostics, codexHome: codexHome)
+        for (name, asleep) in [(NSWorkspace.willSleepNotification, true), (NSWorkspace.didWakeNotification, false)] {
+            systemObservers.append(workspaceNotificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.setSleeping(asleep) }
+            })
+        }
+    }
+
+    isolated deinit {
+        stop()
+        for observer in systemObservers { workspaceNotificationCenter.removeObserver(observer) }
+    }
+
+    private func setSleeping(_ value: Bool) {
+        guard sleeping != value else { return }
+        sleeping = value
+        // A separate epoch invalidates usage work without interrupting the
+        // activity subscription or discarding the last successful account data.
+        usageGeneration &+= 1
+        usageTask?.cancel(); usageTask = nil
+        refreshTask?.cancel(); refreshTask = nil
+        nextUsageRefresh = .distantPast
+        isRefreshing = false
+        diagnostics.updateContext(["usage_refreshing": .bool(false)])
+        if !sleeping, isMonitoring { scheduleUsageRefresh(after: 0) }
+        onChange?()
     }
 
     func start() {
@@ -55,6 +90,7 @@ final class CodexMonitor {
 
     func stop() {
         generation += 1
+        usageGeneration &+= 1
         usageTask?.cancel()
         activityTask?.cancel()
         activityObservation.stop()
@@ -77,10 +113,10 @@ final class CodexMonitor {
     }
 
     func refresh() {
-        guard isMonitoring, !isRefreshing else { return }
-        let current = generation
+        guard isMonitoring, !sleeping, !isRefreshing else { return }
+        let current = generation, usageEpoch = usageGeneration
         refreshTask = Task { [weak self] in
-            await self?.refreshUsage(generation: current)
+            await self?.refreshUsage(generation: current, usageEpoch: usageEpoch)
         }
     }
 
@@ -129,17 +165,19 @@ final class CodexMonitor {
 
     private func scheduleUsageRefresh(after delay: TimeInterval) {
         usageTask?.cancel()
+        guard isMonitoring, !sleeping else { usageTask = nil; return }
         nextUsageRefresh = Date().addingTimeInterval(delay)
-        let current = generation
+        let current = generation, usageEpoch = usageGeneration
         usageTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             guard let self, self.generation == current, !Task.isCancelled else { return }
-            await self.refreshUsage(generation: current)
+            await self.refreshUsage(generation: current, usageEpoch: usageEpoch)
         }
     }
 
-    private func refreshUsage(generation current: Int) async {
-        guard !isRefreshing, generation == current else { return }
+    private func refreshUsage(generation current: Int, usageEpoch: Int) async {
+        guard isMonitoring, !sleeping, !isRefreshing, !Task.isCancelled,
+              generation == current, usageGeneration == usageEpoch else { return }
         isRefreshing = true
         let accountRevision = accountObserver.revision
         let interval = diagnostics.beginInterval(.usageRefresh)
@@ -147,7 +185,7 @@ final class CodexMonitor {
         diagnostics.updateContext(["usage_refreshing": .bool(true)])
         defer {
             diagnostics.endInterval(interval, outcome: outcome)
-            if generation == current {
+            if generation == current, usageGeneration == usageEpoch {
                 isRefreshing = false
                 diagnostics.updateContext(["usage_refreshing": .bool(false)])
                 scheduleUsageRefresh(after: UsageRefreshPolicy.delay(
@@ -155,8 +193,8 @@ final class CodexMonitor {
                     hasUsage: usage != nil, failed: usageError != nil))
             }
         }
-        let result = await usageReader.readAccountAware()
-        guard !Task.isCancelled, generation == current else { outcome = .cancelled; return }
+        let result = await readUsage()
+        guard !Task.isCancelled, generation == current, usageGeneration == usageEpoch else { outcome = .cancelled; return }
         guard accountRevision == accountObserver.revision else { invalidateAccount(); return }
         if case .failure(let usageFailure) = result.usage {
             outcome = .failed
